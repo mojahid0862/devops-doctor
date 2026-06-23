@@ -1,0 +1,7 @@
+interface:
+  display_name: "Terraform Plan Review"
+  short_description: "Review Terraform plans for risk."
+  default_prompt: "Use $terraform-plan-review to review this Terraform plan for production risk."
+
+policy:
+  allow_implicit_invocation: true

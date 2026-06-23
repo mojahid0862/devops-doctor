@@ -1,0 +1,7 @@
+interface:
+  display_name: "GitLab MR Review"
+  short_description: "Review GitLab MRs for CI/CD risk."
+  default_prompt: "Use $gitlab-mr-review to review this GitLab MR for CI/CD and AWS risk."
+
+policy:
+  allow_implicit_invocation: true

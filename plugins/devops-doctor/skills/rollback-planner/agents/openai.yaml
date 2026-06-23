@@ -1,0 +1,7 @@
+interface:
+  display_name: "Rollback Planner"
+  short_description: "Plan safe production rollback."
+  default_prompt: "Use $rollback-planner to make this deployment rollback-safe."
+
+policy:
+  allow_implicit_invocation: true

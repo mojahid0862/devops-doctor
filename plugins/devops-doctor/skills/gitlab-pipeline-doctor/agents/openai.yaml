@@ -1,0 +1,7 @@
+interface:
+  display_name: "GitLab Pipeline Doctor"
+  short_description: "Investigate failed GitLab CI pipelines."
+  default_prompt: "Use $gitlab-pipeline-doctor to investigate this GitLab failed pipeline."
+
+policy:
+  allow_implicit_invocation: true

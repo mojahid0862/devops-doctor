@@ -1,0 +1,7 @@
+interface:
+  display_name: "Security Drift Check"
+  short_description: "Check DevOps security drift."
+  default_prompt: "Use $security-drift-check to check this repo and AWS setup for security drift."
+
+policy:
+  allow_implicit_invocation: true

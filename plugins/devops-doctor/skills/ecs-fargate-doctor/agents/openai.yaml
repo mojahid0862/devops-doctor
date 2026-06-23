@@ -1,0 +1,7 @@
+interface:
+  display_name: "ECS Fargate Doctor"
+  short_description: "Diagnose ECS and Fargate services."
+  default_prompt: "Use $ecs-fargate-doctor to investigate this ECS Fargate service issue."
+
+policy:
+  allow_implicit_invocation: true

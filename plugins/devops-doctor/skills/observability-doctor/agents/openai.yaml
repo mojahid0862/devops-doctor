@@ -1,0 +1,7 @@
+interface:
+  display_name: "Observability Doctor"
+  short_description: "Diagnose incidents from telemetry."
+  default_prompt: "Use $observability-doctor to investigate this incident with logs and metrics."
+
+policy:
+  allow_implicit_invocation: true

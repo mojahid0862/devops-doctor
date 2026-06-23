@@ -1,0 +1,7 @@
+interface:
+  display_name: "Cost Optimizer"
+  short_description: "Find AWS cost waste safely."
+  default_prompt: "Use $cost-optimizer to find AWS cost waste and quick savings."
+
+policy:
+  allow_implicit_invocation: true

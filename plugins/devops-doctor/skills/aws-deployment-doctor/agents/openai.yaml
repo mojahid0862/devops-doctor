@@ -1,0 +1,7 @@
+interface:
+  display_name: "AWS Deployment Doctor"
+  short_description: "Diagnose AWS deployment failures."
+  default_prompt: "Use $aws-deployment-doctor to investigate this AWS deployment failure."
+
+policy:
+  allow_implicit_invocation: true

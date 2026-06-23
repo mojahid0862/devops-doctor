@@ -1,0 +1,41 @@
+{
+  "name": "devops-doctor",
+  "version": "0.1.0+codex.20260623054535",
+  "description": "Chat-first DevOps/SRE operator for GitLab CI/CD, AWS, Terraform, cost, security drift, observability, and safe rollbacks.",
+  "author": {
+    "name": "mojahid0862",
+    "url": "https://github.com/mojahid0862"
+  },
+  "homepage": "https://github.com/mojahid0862/devops-doctor",
+  "repository": "https://github.com/mojahid0862/devops-doctor",
+  "keywords": [
+    "devops",
+    "sre",
+    "aws",
+    "gitlab",
+    "terraform",
+    "observability"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "DevOps Doctor",
+    "shortDescription": "Chat-first DevOps/SRE operator for GitLab CI/CD, AWS, Terraform, cost, security, and rollbacks.",
+    "longDescription": "DevOps Doctor helps Codex act as a chat-first senior SRE/DevOps operator for production engineering work. It collects GitLab, AWS, repo, Terraform, Docker, Kubernetes, cost, security, and observability evidence from the chat using local authenticated CLIs and read-only helpers. It follows a strict evidence contract: no invented current state, clear blockers when tools or permissions are missing, unsafe write actions gated by explicit approval, and fixes paired with validation and rollback.",
+    "developerName": "mojahid0862",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Automation"
+    ],
+    "defaultPrompt": [
+      "Handle this GitLab or AWS issue from chat with evidence only.",
+      "Investigate this GitLab failed pipeline with glab and no guessing.",
+      "Investigate this AWS ECS/Fargate failure and give a safe rollback plan."
+    ],
+    "websiteURL": "https://github.com/mojahid0862/devops-doctor",
+    "brandColor": "#2563EB",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/icon.png"
+  }
+}

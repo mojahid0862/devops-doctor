@@ -1,0 +1,7 @@
+interface:
+  display_name: "DevOps Operator"
+  short_description: "Chat-first DevOps control plane."
+  default_prompt: "Use $devops-operator to handle this GitLab or AWS issue from chat."
+
+policy:
+  allow_implicit_invocation: true
