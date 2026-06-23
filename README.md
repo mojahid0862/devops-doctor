@@ -9,7 +9,7 @@ It is designed to collect evidence from local authenticated CLIs and repo files,
 Add this repository as a Codex plugin marketplace:
 
 ```bash
-codex plugin marketplace add git@github.com:mojahid0862/devops-doctor.git --ref main
+codex plugin marketplace add https://github.com/mojahid0862/devops-doctor.git --ref main
 ```
 
 Install the plugin:
