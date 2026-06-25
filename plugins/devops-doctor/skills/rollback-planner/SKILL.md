@@ -1,6 +1,6 @@
 ---
 name: rollback-planner
-description: Create safe rollback and recovery plans for GitLab deployments, AWS ECS/Fargate, EC2, Lambda, RDS, Kubernetes, Terraform, Docker, migrations, feature flags, DNS/CDN, and failed releases. Use when the user asks how to roll back, reduce blast radius, recover production, or make a deployment rollback-safe.
+description: Create safe rollback and recovery plans for GitLab deployments, AWS ECS/Fargate, EC2, Lambda, RDS, ElastiCache/Redis, Kubernetes, Terraform, Docker, migrations, feature flags, CloudFront/Route 53 DNS/CDN, and failed releases. Use when the user asks how to roll back, reduce blast radius, recover production, or make a deployment rollback-safe.
 ---
 
 # Rollback Planner
@@ -26,6 +26,7 @@ description: Create safe rollback and recovery plans for GitLab deployments, AWS
 - DB migration direction and backup state
 - For ECS/Fargate, use `aws_deploy_snapshot.py` to capture service revision, task definition, ECR digest/tag, CloudTrail deploy timing, target health, and recent stopped tasks before writing the rollback sequence.
 - For DNS/CDN/storage rollback, use `aws_stack_snapshot.py --services s3,cloudfront,route53,cloudtrail`.
+- For Redis/ElastiCache rollback, capture cluster status, failover events, replication health, parameter changes, and app endpoint dependencies before endpoint or failover actions.
 
 3. Build the rollback sequence:
 

@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,8 @@ def run_glab(glab: str, args: list[str], *, timeout: int = 60, parse_json: bool 
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             env={**os.environ, "NO_COLOR": "1"},
         )
@@ -93,6 +96,22 @@ def run_glab(glab: str, args: list[str], *, timeout: int = 60, parse_json: bool 
 
 def api_project(repo: str, *parts: str) -> str:
     return "/".join(["projects", quote(repo, safe=""), *[str(part).strip("/") for part in parts]])
+
+
+def run_glab_tasks(glab: str, tasks: dict[str, tuple[list[str], dict[str, Any]]], max_workers: int) -> dict[str, dict[str, Any]]:
+    workers = max(1, max_workers)
+    with ThreadPoolExecutor(max_workers=min(workers, len(tasks) or 1)) as executor:
+        futures = {
+            key: executor.submit(run_glab, glab, command_args, **kwargs)
+            for key, (command_args, kwargs) in tasks.items()
+        }
+        results: dict[str, dict[str, Any]] = {}
+        for key, future in futures.items():
+            try:
+                results[key] = future.result()
+            except Exception as exc:
+                results[key] = {"ok": False, "error": redact(str(exc)), "command": "internal"}
+        return results
 
 
 def classify_trace(trace: str) -> list[dict[str, Any]]:
@@ -165,6 +184,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--job-id", help="Failed job ID to inspect.")
     parser.add_argument("--mr-iid", help="Optional merge request IID for context.")
     parser.add_argument("--trace-lines", type=int, default=300, help="Tail this many redacted job trace lines.")
+    parser.add_argument("--max-workers", type=int, default=8, help="Maximum concurrent glab read workers; lower if GitLab API throttles.")
     parser.add_argument("--output", help="Write JSON snapshot to this path.")
     return parser.parse_args()
 
@@ -191,27 +211,31 @@ def main() -> int:
         "merge_request": None,
     }
 
+    tasks: dict[str, tuple[list[str], dict[str, Any]]] = {}
     if args.pipeline_id:
-        snapshot["pipeline"] = run_glab(glab, ["api", api_project(args.repo, "pipelines", args.pipeline_id)])
-        snapshot["pipeline_jobs"] = run_glab(glab, ["api", api_project(args.repo, "pipelines", args.pipeline_id, "jobs")])
+        tasks["pipeline"] = (["api", api_project(args.repo, "pipelines", args.pipeline_id)], {})
+        tasks["pipeline_jobs"] = (["api", api_project(args.repo, "pipelines", args.pipeline_id, "jobs")], {})
 
     if args.job_id:
-        snapshot["job"] = run_glab(glab, ["api", api_project(args.repo, "jobs", args.job_id)])
-        trace = run_glab(
-            glab,
-            ["api", api_project(args.repo, "jobs", args.job_id, "trace")],
-            timeout=90,
-            parse_json=False,
-        )
+        tasks["job"] = (["api", api_project(args.repo, "jobs", args.job_id)], {})
+        tasks["job_trace"] = (["api", api_project(args.repo, "jobs", args.job_id, "trace")], {"timeout": 90, "parse_json": False})
+
+    if args.mr_iid:
+        tasks["merge_request"] = (["api", api_project(args.repo, "merge_requests", args.mr_iid)], {})
+
+    task_results = run_glab_tasks(glab, tasks, args.max_workers)
+    for key in ("pipeline", "pipeline_jobs", "job", "merge_request"):
+        if key in task_results:
+            snapshot[key] = task_results[key]
+
+    trace = task_results.get("job_trace")
+    if trace:
         snapshot["job_trace_tail"] = {
             "ok": trace.get("ok"),
             "command": trace.get("command"),
             "error": trace.get("error"),
             "data": tail_lines(str(trace.get("data", "")), args.trace_lines) if trace.get("ok") else None,
         }
-
-    if args.mr_iid:
-        snapshot["merge_request"] = run_glab(glab, ["api", api_project(args.repo, "merge_requests", args.mr_iid)])
 
     jobs_summary = summarize_jobs(snapshot["pipeline_jobs"] or {})
     trace_text = str((snapshot.get("job_trace_tail") or {}).get("data") or "")

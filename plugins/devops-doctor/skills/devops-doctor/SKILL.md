@@ -1,6 +1,6 @@
 ---
 name: devops-doctor
-description: Investigate all-in-one DevOps/SRE issues across cloud infrastructure, CI/CD, GitLab pipeline failures, merge requests, deployment failures, over-provisioning, cost waste, security drift, and production reliability using local repo context plus read-only CLI evidence. Use when the user gives an AWS, Azure, GCP, GitLab failed pipeline, GitLab MR URL, ECS, Fargate, EC2, AKS, Lambda, RDS, S3, IAM, VPC, Terraform, Kubernetes, Docker, CI/CD, monitoring, webhook, or cloud cost problem and wants end-to-end DevOps/SRE diagnosis, code review, or remediation.
+description: Investigate all-in-one DevOps/SRE issues across cloud infrastructure, CI/CD, GitLab pipeline failures, merge requests, deployment failures, over-provisioning, cost waste, security drift, and production reliability using local repo context plus read-only CLI evidence. Use when the user gives an AWS, Azure, GCP, GitLab failed pipeline, GitLab MR URL, ECS, Fargate, EC2, AKS, Lambda, RDS, ElastiCache/Redis, S3, CloudFront, Route 53, IAM, VPC, Terraform, Kubernetes, Docker, CI/CD, monitoring, webhook, or cloud cost problem and wants end-to-end DevOps/SRE diagnosis, code review, or remediation.
 ---
 
 # DevOps Doctor
@@ -34,7 +34,7 @@ for a write action is required.
 
 ## Scope
 
-- AWS primary: ECS/Fargate, EC2, EKS, Lambda, S3, RDS, IAM, VPC/security groups, ELB/ALB/NLB, CloudWatch, CloudTrail, Cost Explorer.
+- AWS primary: ECS/Fargate, EC2, EKS, Lambda, S3, RDS, ElastiCache/Redis, CloudFront, Route 53, IAM, VPC/security groups, ELB/ALB/NLB, CloudWatch, CloudTrail, Cost Explorer.
 - Multi-cloud adjacent: Azure, GCP, AKS, managed databases, object storage, IAM/RBAC, networking, and cost evidence when relevant.
 - Delivery and ops: Docker/Compose, Kubernetes, Helm, Terraform, Ansible, GitLab CI, Jenkins, Azure DevOps, Argo CD, n8n, Nginx, Cloudflare.
 - CI/CD end to end: GitLab failed pipelines, MR URLs, runner failures, build/test/deploy stages, release gates, artifacts, cache, rules, environments, approvals, rollbacks, and quality gates.
@@ -154,11 +154,11 @@ Use the included helpers for bounded read-only AWS evidence. Prefer service-spec
 
 ```bash
 python ../../scripts/aws_stack_snapshot.py --region us-east-1 --services ecs,rds,elasticache,s3,cloudfront,route53,lambda,cloudwatch,ecr,cloudtrail --output aws-stack-snapshot.json
-python ../../scripts/aws_deploy_snapshot.py --region us-east-1 --cluster <cluster> --service <service> --output aws-deploy-snapshot.json
-python ../../scripts/aws_infra_snapshot.py --region us-east-1 --output aws-infra-snapshot.json
+python ../../scripts/aws_deploy_snapshot.py --region us-east-1 --cluster <cluster> --service <service> --target-group-arn <target-group-arn> --log-group <log-group> --since 2h --output aws-deploy-snapshot.json
+python ../../scripts/aws_infra_snapshot.py --region us-east-1 --services ec2,ecs,rds,lambda,elbv2,cloudwatch,s3,cloudfront,route53,elasticache --output aws-infra-snapshot.json
 ```
 
-Add `--profile <name>` when the user uses named AWS profiles. Add `--services ecs,rds,elasticache,s3,cloudfront,route53,lambda,cloudwatch,ecr,cloudtrail` to narrow scope.
+Add `--profile <name>` when the user uses named AWS profiles. Add `--task-arn <task-arn>` for one ECS task. Add `--db-instance`, `--cache-cluster`, `--replication-group`, `--distribution-id`, `--hosted-zone-id`, or `--health-check-id` to `aws_deploy_snapshot.py` for one-shot full-stack incident checks.
 
 ## Triage Playbooks
 
@@ -230,6 +230,7 @@ kubectl logs <pod> -n <namespace> --previous
 
 - Check instance status, failover, CPU, connections, free storage, IOPS, latency, locks, parameter group changes, backups, maintenance windows, security groups, public access, and version support.
 - For PostgreSQL/RDS plus Redis/ElastiCache broad health checks, use `aws_stack_snapshot.py --services rds,elasticache,cloudwatch,cloudtrail`.
+- For ElastiCache/Redis health, check node status, failover events, CPU/memory, evictions, current connections, replication lag, subnet/SG reachability, parameter changes, and app timeout/backoff settings.
 - Do not run destructive SQL. For query performance, request or inspect safe read-only stats.
 
 ### Lambda and Serverless
@@ -241,6 +242,7 @@ kubectl logs <pod> -n <namespace> --previous
 
 - Check public access blocks, bucket policies, encryption, versioning, lifecycle, access logs, CloudFront status/origins/certs, Route 53 hosted zones/records, IAM privilege breadth, stale access keys, wildcard actions, public security group ingress, and CloudTrail events.
 - Use `aws_stack_snapshot.py --services s3,cloudfront,route53,cloudwatch,cloudtrail` for CDN/DNS/storage investigations.
+- For CDN/DNS failures, compare CloudFront distribution status, origin reachability, aliases/certs, cache behavior, invalidation timing, Route 53 record targets, TTLs, health checks, and recent CloudTrail changes before recommending DNS or cache changes.
 - Never dump IAM credentials or secret values.
 
 ### Cost and Over-Provisioning

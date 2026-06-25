@@ -1,6 +1,6 @@
 ---
 name: devops-operator
-description: Operate DevOps Doctor as a chat-first control plane for GitLab CI/CD and AWS work where Codex handles evidence collection, triage, commands, validation, and rollback planning from the chat. Use when the user wants to avoid opening GitLab or AWS manually, wants the plugin to handle incidents end to end, or asks for strict non-hallucinating DevOps automation.
+description: Operate DevOps Doctor as a chat-first control plane for GitLab CI/CD and AWS work, including ECS/Fargate, RDS, ElastiCache/Redis, S3, CloudFront, and Route 53, where Codex handles evidence collection, triage, commands, validation, and rollback planning from the chat. Use when the user wants to avoid opening GitLab or AWS manually, wants the plugin to handle incidents end to end, or asks for strict non-hallucinating DevOps automation.
 ---
 
 # DevOps Operator
@@ -38,6 +38,7 @@ Use the result to decide:
 - For failed pipelines/jobs or "why failed" requests, use `gitlab_pipeline_snapshot.py` and its root-cause candidates.
 - For broad AWS stack checks, use `aws_stack_snapshot.py` with the smallest service allowlist matching the request.
 - For ECS/Fargate incidents with cluster/service details, use `aws_deploy_snapshot.py` first.
+- For CDN/DNS or Redis incidents, include only the needed `cloudfront`, `route53`, and `elasticache` services in the AWS snapshot.
 
 ## Routing
 

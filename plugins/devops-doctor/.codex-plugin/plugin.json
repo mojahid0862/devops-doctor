@@ -1,6 +1,6 @@
 {
   "name": "devops-doctor",
-  "version": "0.1.0+codex.20260623054535",
+  "version": "0.1.1+codex.20260625",
   "description": "Fast, read-only DevOps/SRE operator for GitLab CI/CD, AWS stack health, incidents, cost, security drift, observability, and safe rollbacks.",
   "author": {
     "name": "mojahid0862",

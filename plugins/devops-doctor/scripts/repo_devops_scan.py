@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -39,7 +40,23 @@ TARGET_NAMES = {
     "AndroidManifest.xml",
 }
 TARGET_SUFFIXES = {".tf", ".tfvars", ".yml", ".yaml", ".Dockerfile"}
-SKIP_DIRS = {".git", "node_modules", ".terraform", "dist", "build", ".next", "coverage", "vendor"}
+SKIP_DIRS = {
+    ".dart_tool",
+    ".git",
+    ".gradle",
+    ".next",
+    ".terraform",
+    ".venv",
+    "Carthage",
+    "DerivedData",
+    "Pods",
+    "build",
+    "coverage",
+    "dist",
+    "node_modules",
+    "target",
+    "vendor",
+}
 
 RULES = [
     ("secret_like_value", re.compile(r"(?i)(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{12,}")),
@@ -167,6 +184,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Scan local repo for DevOps security/reliability risk patterns.")
     parser.add_argument("--root", default=".", help="Repository root to scan.")
     parser.add_argument("--output", help="Write JSON result to this path.")
+    parser.add_argument("--max-workers", type=int, default=8, help="Throttle parallel file reads; lower this on slow disks or constrained runners.")
     return parser.parse_args()
 
 
@@ -175,8 +193,10 @@ def main() -> int:
     root = Path(args.root).resolve()
     files = [path for path in root.rglob("*") if path.is_file() and should_scan(path.relative_to(root))]
     findings: list[dict[str, Any]] = []
-    for path in files:
-        findings.extend(scan_file(path, root))
+    max_workers = max(1, args.max_workers)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for file_findings in executor.map(lambda path: scan_file(path, root), files):
+            findings.extend(file_findings)
     signals = repo_signals(root, files)
     findings.extend(signal_findings(signals))
 

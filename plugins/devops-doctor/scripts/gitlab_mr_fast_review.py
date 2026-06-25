@@ -59,6 +59,8 @@ def run_glab(glab: str, args: list[str], *, timeout: int = 60, parse_json: bool 
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             env={**os.environ, "NO_COLOR": "1"},
         )

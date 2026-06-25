@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -60,6 +61,8 @@ def run_glab(glab: str, args: list[str], *, timeout: int = 60, parse_json: bool 
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             env={**os.environ, "NO_COLOR": "1"},
         )
@@ -88,6 +91,22 @@ def run_glab(glab: str, args: list[str], *, timeout: int = 60, parse_json: bool 
 
 def api_project(repo: str, *parts: str) -> str:
     return "/".join(["projects", quote(repo, safe=""), *[str(part).strip("/") for part in parts]])
+
+
+def run_glab_tasks(glab: str, tasks: dict[str, tuple[list[str], dict[str, Any]]], max_workers: int) -> dict[str, dict[str, Any]]:
+    workers = max(1, max_workers)
+    with ThreadPoolExecutor(max_workers=min(workers, len(tasks) or 1)) as executor:
+        futures = {
+            key: executor.submit(run_glab, glab, command_args, **kwargs)
+            for key, (command_args, kwargs) in tasks.items()
+        }
+        results: dict[str, dict[str, Any]] = {}
+        for key, future in futures.items():
+            try:
+                results[key] = future.result()
+            except Exception as exc:
+                results[key] = {"ok": False, "error": redact(str(exc)), "command": "internal"}
+        return results
 
 
 def changed_paths(changes_result: dict[str, Any]) -> list[str]:
@@ -128,6 +147,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo", required=True, help="GitLab project path, for example group/project.")
     parser.add_argument("--mr-iid", required=True, help="Merge request IID.")
     parser.add_argument("--include-discussions", action="store_true", help="Include MR discussions metadata.")
+    parser.add_argument("--max-workers", type=int, default=8, help="Maximum concurrent glab read workers; lower if GitLab API throttles.")
     parser.add_argument("--output", help="Write JSON snapshot to this path.")
     return parser.parse_args()
 
@@ -145,14 +165,21 @@ def main() -> int:
         "mr_iid": args.mr_iid,
         "glab_path": glab,
         "auth": run_glab(glab, ["auth", "status"], timeout=30, parse_json=False),
-        "merge_request": run_glab(glab, ["api", api_project(args.repo, "merge_requests", args.mr_iid)]),
-        "changes": run_glab(glab, ["api", api_project(args.repo, "merge_requests", args.mr_iid, "changes")]),
-        "pipelines": run_glab(glab, ["api", api_project(args.repo, "merge_requests", args.mr_iid, "pipelines")]),
-        "diff": run_glab(glab, ["mr", "diff", args.mr_iid, "--repo", args.repo], timeout=90, parse_json=False),
+        "merge_request": None,
+        "changes": None,
+        "pipelines": None,
+        "diff": None,
         "discussions": None,
     }
+    tasks: dict[str, tuple[list[str], dict[str, Any]]] = {
+        "merge_request": (["api", api_project(args.repo, "merge_requests", args.mr_iid)], {}),
+        "changes": (["api", api_project(args.repo, "merge_requests", args.mr_iid, "changes")], {}),
+        "pipelines": (["api", api_project(args.repo, "merge_requests", args.mr_iid, "pipelines")], {}),
+        "diff": (["mr", "diff", args.mr_iid, "--repo", args.repo], {"timeout": 90, "parse_json": False}),
+    }
     if args.include_discussions:
-        snapshot["discussions"] = run_glab(glab, ["api", api_project(args.repo, "merge_requests", args.mr_iid, "discussions")])
+        tasks["discussions"] = (["api", api_project(args.repo, "merge_requests", args.mr_iid, "discussions")], {})
+    snapshot.update(run_glab_tasks(glab, tasks, args.max_workers))
 
     summary, findings, blockers = summarize(snapshot)
     result = {

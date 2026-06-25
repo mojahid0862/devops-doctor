@@ -1,6 +1,6 @@
 ---
 name: cost-optimizer
-description: Find AWS cost waste and rightsizing opportunities using read-only Cost Explorer, CloudWatch, EC2, ECS, RDS, EBS, EIP, NAT gateway, load balancer, S3, CloudWatch Logs, and ECR evidence. Use when the user asks to reduce AWS cost, find waste, optimize spend, or check over-provisioning.
+description: Find AWS cost waste and rightsizing opportunities using read-only Cost Explorer, CloudWatch, EC2, ECS, RDS, ElastiCache/Redis, EBS, EIP, NAT gateway, load balancer, S3, CloudFront, Route 53, CloudWatch Logs, and ECR evidence. Use when the user asks to reduce AWS cost, find waste, optimize spend, or check over-provisioning.
 ---
 
 # Cost Optimizer
@@ -24,7 +24,7 @@ python ../../scripts/aws_cost_snapshot.py --days 14 --output aws-cost-snapshot.j
 2. Capture regional infra when region is known:
 
 ```bash
-python ../../scripts/aws_stack_snapshot.py --region <region> --services ecs,rds,elasticache,s3,cloudfront,lambda,cloudwatch,ecr --output aws-cost-stack-snapshot.json
+python ../../scripts/aws_stack_snapshot.py --region <region> --services ecs,rds,elasticache,s3,cloudfront,route53,lambda,cloudwatch,ecr --output aws-cost-stack-snapshot.json
 ```
 
 3. Prefer helper `summary.top_services`, `findings`, and `blockers`, then look for:
@@ -32,6 +32,7 @@ python ../../scripts/aws_stack_snapshot.py --region <region> --services ecs,rds,
 - unattached EBS, unused EIP, idle load balancers, old snapshots
 - oversized EC2/RDS, low CPU/network, low connections
 - ECS CPU/memory reservations much higher than actual usage
+- idle or oversized ElastiCache/Redis nodes, replicas, and snapshots
 - NAT gateway and cross-AZ/data transfer hotspots
 - CloudWatch Logs retention too long or unbounded
 - stale ECR images and untagged image buildup
