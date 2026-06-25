@@ -256,6 +256,58 @@ COLLECTORS = {
 }
 
 
+def summarize(snapshot: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    findings: list[dict[str, Any]] = []
+    blockers: list[dict[str, Any]] = []
+
+    def inspect(scope: str, value: Any) -> None:
+        if isinstance(value, dict) and value.get("ok") is False:
+            blockers.append({"scope": scope, "reason": value.get("error", "command failed")})
+        elif isinstance(value, dict):
+            for key, child in value.items():
+                inspect(f"{scope}.{key}", child)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                inspect(f"{scope}[{index}]", child)
+
+    inspect("raw", snapshot)
+
+    rds_instances = snapshot.get("services", {}).get("rds", {}).get("instances", {}).get("data", [])
+    for db in rds_instances if isinstance(rds_instances, list) else []:
+        if db.get("PubliclyAccessible"):
+            findings.append({"severity": "high", "service": "rds", "rule": "publicly_accessible", "resource": db.get("DBInstanceIdentifier")})
+        if not db.get("StorageEncrypted"):
+            findings.append({"severity": "high", "service": "rds", "rule": "storage_not_encrypted", "resource": db.get("DBInstanceIdentifier")})
+
+    ecs_groups = snapshot.get("services", {}).get("ecs", {}).get("services", [])
+    unhealthy = 0
+    for group in ecs_groups if isinstance(ecs_groups, list) else []:
+        services = group.get("services", {}).get("data", [])
+        for service in services if isinstance(services, list) else []:
+            if service.get("desiredCount") != service.get("runningCount") or service.get("pendingCount"):
+                unhealthy += 1
+                findings.append({"severity": "high", "service": "ecs", "rule": "desired_running_mismatch", "resource": service.get("serviceName")})
+
+    alarms = snapshot.get("services", {}).get("cloudwatch", {}).get("alarms", {}).get("data", [])
+    if isinstance(alarms, list):
+        for alarm in alarms[:10]:
+            findings.append({"severity": "medium", "service": "cloudwatch", "rule": "alarm_in_alarm_state", "resource": alarm.get("AlarmName")})
+
+    return (
+        {
+            "profile": snapshot.get("profile"),
+            "region": snapshot.get("region"),
+            "services_collected": sorted((snapshot.get("services") or {}).keys()),
+            "finding_count": len(findings),
+            "blocker_count": len(blockers),
+            "ecs_unhealthy_services": unhealthy,
+            "cloudwatch_alarm_count": len(alarms) if isinstance(alarms, list) else None,
+        },
+        findings,
+        blockers,
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect a bounded read-only AWS infrastructure snapshot.")
     parser.add_argument("--profile", help="AWS profile name.")
@@ -292,7 +344,19 @@ def main() -> int:
     for service in selected:
         snapshot["services"][service] = COLLECTORS[service](args.profile, args.region)
 
-    payload = json.dumps(snapshot, indent=2, sort_keys=True, default=str)
+    summary, findings, blockers = summarize(snapshot)
+    result = {
+        "summary": summary,
+        "findings": findings,
+        "evidence": {"identity": snapshot.get("identity")},
+        "blockers": blockers,
+        "next_commands": [
+            "python scripts/aws_stack_snapshot.py --region <region> --services ecs,rds,elasticache,s3,cloudfront,route53,lambda,cloudwatch,ecr,cloudtrail",
+        ],
+        "raw": snapshot,
+    }
+
+    payload = json.dumps(result, indent=2, sort_keys=True, default=str)
     if args.output:
         Path(args.output).write_text(payload + "\n", encoding="utf-8")
     else:

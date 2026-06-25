@@ -9,7 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +65,109 @@ def run(command: list[str], *, timeout: int = 60, parse_json: bool = True) -> di
 
 def aws_json(base: list[str], profile: str | None, region: str | None, timeout: int = 60) -> dict[str, Any]:
     return run([*scoped(base, profile, region), "--output", "json"], timeout=timeout)
+
+
+def since_to_start(value: str) -> str:
+    match = re.fullmatch(r"(\d+)([hmHdD])", value.strip())
+    if not match:
+        return value
+    amount = int(match.group(1))
+    unit = match.group(2).lower()
+    if unit == "m":
+        delta = timedelta(minutes=amount)
+    elif unit == "h":
+        delta = timedelta(hours=amount)
+    else:
+        delta = timedelta(days=amount)
+    return (datetime.now(timezone.utc) - delta).isoformat()
+
+
+def parse_ecr_image(image: str) -> dict[str, str] | None:
+    match = re.match(r"(?P<account>\d+)\.dkr\.ecr\.(?P<region>[^.]+)\.amazonaws\.com/(?P<repo>[^@:]+)(?::(?P<tag>[^@]+))?(?:@(?P<digest>sha256:[a-f0-9]+))?", image)
+    if not match:
+        return None
+    return {key: value for key, value in match.groupdict().items() if value}
+
+
+def collect_ecr_images(task_definition: dict[str, Any], profile: str | None, region: str | None) -> list[dict[str, Any]]:
+    data = task_definition.get("data") if task_definition.get("ok") else None
+    containers = data.get("containerDefinitions", []) if isinstance(data, dict) else []
+    images: list[dict[str, Any]] = []
+    for container in containers:
+        image = container.get("image")
+        parsed = parse_ecr_image(str(image or ""))
+        if not parsed:
+            continue
+        selector = ["--image-ids"]
+        if parsed.get("digest"):
+            selector.extend(["imageDigest=" + parsed["digest"]])
+        elif parsed.get("tag"):
+            selector.extend(["imageTag=" + parsed["tag"]])
+        else:
+            selector = []
+        images.append(
+            {
+                "container": container.get("name"),
+                "image": image,
+                "repository": parsed.get("repo"),
+                "details": aws_json(["ecr", "describe-images", "--repository-name", parsed["repo"], *selector], profile, parsed.get("region") or region, timeout=45),
+            }
+        )
+    return images
+
+
+def summarize(snapshot: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    findings: list[dict[str, Any]] = []
+    blockers: list[dict[str, Any]] = []
+
+    def inspect(scope: str, value: Any) -> None:
+        if isinstance(value, dict) and value.get("ok") is False:
+            blockers.append({"scope": scope, "reason": value.get("error", "command failed")})
+        elif isinstance(value, dict):
+            for key, child in value.items():
+                inspect(f"{scope}.{key}", child)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                inspect(f"{scope}[{index}]", child)
+
+    inspect("raw", snapshot)
+
+    services = snapshot.get("ecs_service", {}).get("data") if isinstance(snapshot.get("ecs_service"), dict) else None
+    if isinstance(services, list):
+        for svc in services:
+            if svc.get("desiredCount") != svc.get("runningCount") or svc.get("pendingCount"):
+                findings.append({"severity": "high", "rule": "ecs_desired_running_mismatch", "resource": svc.get("serviceName")})
+            for deployment in svc.get("deployments", []) or []:
+                rollout = deployment.get("rolloutState")
+                if rollout and rollout not in {"COMPLETED", "IN_PROGRESS"}:
+                    findings.append({"severity": "high", "rule": "ecs_deployment_not_healthy", "resource": svc.get("serviceName"), "detail": rollout})
+
+    tasks = snapshot.get("ecs_task", {}).get("data") if isinstance(snapshot.get("ecs_task"), dict) else None
+    if isinstance(tasks, list):
+        for task in tasks:
+            reason = task.get("stoppedReason") or task.get("stopCode")
+            if reason:
+                findings.append({"severity": "high", "rule": "ecs_task_stopped", "resource": task.get("taskArn"), "detail": reason})
+
+    alarms = snapshot.get("alarms", {}).get("data") if isinstance(snapshot.get("alarms"), dict) else None
+    if isinstance(alarms, list):
+        for alarm in alarms[:10]:
+            findings.append({"severity": "medium", "rule": "cloudwatch_alarm", "resource": alarm.get("AlarmName")})
+
+    return (
+        {
+            "region": snapshot.get("region"),
+            "ecs_service_checked": bool(snapshot.get("ecs_service")),
+            "task_definition_checked": bool(snapshot.get("ecs_task_definition")),
+            "target_health_checked": bool(snapshot.get("target_health")),
+            "log_tail_checked": bool(snapshot.get("log_tail")),
+            "ecr_images_checked": len(snapshot.get("ecr_images") or []),
+            "cloudtrail_events_checked": bool(snapshot.get("cloudtrail_events")),
+            "finding_count": len(findings),
+        },
+        findings,
+        blockers,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -199,6 +302,7 @@ def main() -> int:
             args.profile,
             args.region,
         )
+        snapshot["ecr_images"] = collect_ecr_images(snapshot["ecs_task_definition"], args.profile, args.region)
 
     if args.target_group_arn:
         snapshot["target_health"] = aws_json(
@@ -214,7 +318,46 @@ def main() -> int:
             parse_json=False,
         )
 
-    payload = json.dumps(snapshot, indent=2, sort_keys=True, default=str)
+    snapshot["cloudtrail_events"] = aws_json(
+        [
+            "cloudtrail",
+            "lookup-events",
+            "--start-time",
+            since_to_start(args.since),
+            "--max-results",
+            "50",
+            "--query",
+            "Events[?EventSource=='ecs.amazonaws.com' || EventSource=='ecr.amazonaws.com' || EventSource=='elasticloadbalancing.amazonaws.com'].{EventTime:EventTime,EventName:EventName,Username:Username,EventSource:EventSource,ResourceName:Resources[0].ResourceName}",
+        ],
+        args.profile,
+        args.region,
+        timeout=60,
+    )
+
+    summary, findings, blockers = summarize(snapshot)
+    result = {
+        "summary": summary,
+        "findings": findings,
+        "evidence": {
+            "identity": snapshot.get("identity"),
+            "deployment_correlation": {
+                "cluster": args.cluster,
+                "service": args.service,
+                "target_group_arn": args.target_group_arn,
+                "log_group": args.log_group,
+                "since": args.since,
+            },
+        },
+        "blockers": blockers,
+        "next_commands": [
+            "aws ecs describe-services --cluster <cluster> --services <service>",
+            "aws logs tail <log-group> --since 2h --format short",
+            "aws cloudtrail lookup-events --start-time <timestamp>",
+        ],
+        "raw": snapshot,
+    }
+
+    payload = json.dumps(result, indent=2, sort_keys=True, default=str)
     if args.output:
         Path(args.output).write_text(payload + "\n", encoding="utf-8")
     else:

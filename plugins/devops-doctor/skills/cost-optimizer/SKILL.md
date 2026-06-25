@@ -24,10 +24,10 @@ python ../../scripts/aws_cost_snapshot.py --days 14 --output aws-cost-snapshot.j
 2. Capture regional infra when region is known:
 
 ```bash
-python ../../scripts/aws_infra_snapshot.py --region <region> --services ec2,ecs,rds,lambda,elbv2,cloudwatch --output aws-infra-snapshot.json
+python ../../scripts/aws_stack_snapshot.py --region <region> --services ecs,rds,elasticache,s3,cloudfront,lambda,cloudwatch,ecr --output aws-cost-stack-snapshot.json
 ```
 
-3. Look for:
+3. Prefer helper `summary.top_services`, `findings`, and `blockers`, then look for:
 
 - unattached EBS, unused EIP, idle load balancers, old snapshots
 - oversized EC2/RDS, low CPU/network, low connections
@@ -36,6 +36,7 @@ python ../../scripts/aws_infra_snapshot.py --region <region> --services ec2,ecs,
 - CloudWatch Logs retention too long or unbounded
 - stale ECR images and untagged image buildup
 - S3 lifecycle gaps and old storage classes
+- CloudFront distributions, Route 53 records, and Lambda provisioned concurrency that are no longer attached to active traffic
 
 ## Output
 

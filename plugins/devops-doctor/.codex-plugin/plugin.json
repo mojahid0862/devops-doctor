@@ -1,7 +1,7 @@
 {
   "name": "devops-doctor",
   "version": "0.1.0+codex.20260623054535",
-  "description": "Chat-first DevOps/SRE operator for GitLab CI/CD, AWS, Terraform, cost, security drift, observability, and safe rollbacks.",
+  "description": "Fast, read-only DevOps/SRE operator for GitLab CI/CD, AWS stack health, incidents, cost, security drift, observability, and safe rollbacks.",
   "author": {
     "name": "mojahid0862",
     "url": "https://github.com/mojahid0862"
@@ -19,8 +19,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "DevOps Doctor",
-    "shortDescription": "Chat-first DevOps/SRE operator for GitLab CI/CD, AWS, Terraform, cost, security, and rollbacks.",
-    "longDescription": "DevOps Doctor helps Codex act as a chat-first senior SRE/DevOps operator for production engineering work. It collects GitLab, AWS, repo, Terraform, Docker, Kubernetes, cost, security, and observability evidence from the chat using local authenticated CLIs and read-only helpers. It follows a strict evidence contract: no invented current state, clear blockers when tools or permissions are missing, unsafe write actions gated by explicit approval, and fixes paired with validation and rollback.",
+    "shortDescription": "Fast read-only DevOps/SRE operator for GitLab, AWS stack health, incidents, cost, security, and rollbacks.",
+    "longDescription": "DevOps Doctor helps Codex act as a chat-first senior SRE/DevOps operator for production engineering work. It uses fast first-pass routing for normal GitLab MR reviews, deeper root-cause evidence for failed pipelines and incidents, and bounded AWS helpers for ECS/Fargate, RDS PostgreSQL, ElastiCache, S3, CloudFront, Route 53, Lambda, CloudWatch, ECR, and CloudTrail. It follows a strict evidence contract: no invented current state, clear blockers when tools or permissions are missing, read-only by default, unsafe write actions gated by explicit approval, and fixes paired with validation and rollback.",
     "developerName": "mojahid0862",
     "category": "Developer Tools",
     "capabilities": [
@@ -30,7 +30,9 @@
     ],
     "defaultPrompt": [
       "Handle this GitLab or AWS issue from chat with evidence only.",
+      "Fast review this GitLab MR, score it out of 100, and tell me if it is safe to merge.",
       "Investigate this GitLab failed pipeline with glab and no guessing.",
+      "Check my AWS stack health across ECS, RDS, Redis, S3, CloudFront, Route 53, Lambda, and CloudWatch.",
       "Investigate this AWS ECS/Fargate failure and give a safe rollback plan."
     ],
     "websiteURL": "https://github.com/mojahid0862/devops-doctor",

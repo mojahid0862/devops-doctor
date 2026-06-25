@@ -29,10 +29,10 @@ aws configure list
 
 ```bash
 python ../../scripts/aws_deploy_snapshot.py --region <region> --cluster <cluster> --service <service> --output aws-deploy-snapshot.json
-python ../../scripts/aws_infra_snapshot.py --region <region> --services ec2,ecs,rds,lambda,elbv2,cloudwatch --output aws-infra-snapshot.json
+python ../../scripts/aws_stack_snapshot.py --region <region> --services ecs,rds,elasticache,s3,cloudfront,route53,lambda,cloudwatch,ecr,cloudtrail --output aws-stack-snapshot.json
 ```
 
-4. Correlate deploy timeline with service events, target health, failed tasks, logs, metrics, alarms, GitLab deploy job output, and recent IaC changes.
+4. Correlate deploy timeline with service events, target health, failed tasks, logs, ECR image digests/tags, CloudTrail events, metrics, alarms, GitLab deploy job output, and recent IaC changes.
 5. Separate root cause from symptoms: IAM, image pull, container exit, health check, networking, capacity, config, database, DNS/CDN, dependency, or app code.
 
 ## Output

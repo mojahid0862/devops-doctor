@@ -22,12 +22,12 @@ description: Diagnose ECS and Fargate service failures, stopped tasks, unhealthy
 python ../../scripts/aws_deploy_snapshot.py --region <region> --cluster <cluster> --service <service> --target-group-arn <tg-arn> --log-group <log-group> --output ecs-snapshot.json
 ```
 
-3. Check:
+3. Prefer the helper output's `summary`, `findings`, `evidence.deployment_correlation`, and `blockers`, then check:
 
 - service desired/running/pending counts and deployment rollout state
 - last 10 service events
 - stopped task reasons and container exit codes
-- image pull/auth errors and ECR tag availability
+- image pull/auth errors, ECR digest/tag availability, and mutable tag drift
 - target group health and health-check path/port
 - execution role, task role, logging config, CPU/memory, ulimits
 - security group, subnet route, NAT, ALB listener, and container port mapping

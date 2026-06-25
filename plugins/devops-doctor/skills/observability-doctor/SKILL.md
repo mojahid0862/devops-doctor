@@ -21,15 +21,16 @@ description: Diagnose incidents using logs, metrics, traces, alerts, SLOs, Cloud
 ```bash
 aws cloudwatch describe-alarms --state-value ALARM
 aws logs tail <log-group> --since 2h
+python ../../scripts/aws_stack_snapshot.py --region <region> --services ecs,rds,elasticache,lambda,cloudwatch,cloudtrail --since 2h --output observability-stack-snapshot.json
 ```
 
-3. Check:
+3. Prefer helper `summary`, `findings`, and `blockers`, then check:
 
 - golden signals: latency, traffic, errors, saturation
 - deploy markers and GitLab pipeline timing
 - ALB 4xx/5xx, target response time, target health
 - ECS task restarts, OOM, CPU/memory, health check failures
-- DB connections, CPU, locks, storage, failovers
+- DB connections, CPU, locks, storage, failovers, Redis/ElastiCache failover or connection pressure
 - missing alerts, noisy alerts, no runbook, no rollback signal
 
 ## Output

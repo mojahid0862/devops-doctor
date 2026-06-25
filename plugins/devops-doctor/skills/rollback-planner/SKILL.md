@@ -24,6 +24,8 @@ description: Create safe rollback and recovery plans for GitLab deployments, AWS
 - Helm revision
 - Terraform state and previous plan
 - DB migration direction and backup state
+- For ECS/Fargate, use `aws_deploy_snapshot.py` to capture service revision, task definition, ECR digest/tag, CloudTrail deploy timing, target health, and recent stopped tasks before writing the rollback sequence.
+- For DNS/CDN/storage rollback, use `aws_stack_snapshot.py --services s3,cloudfront,route53,cloudtrail`.
 
 3. Build the rollback sequence:
 

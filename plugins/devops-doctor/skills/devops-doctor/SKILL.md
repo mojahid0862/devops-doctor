@@ -131,9 +131,10 @@ glab mr view <mr-iid>
 glab mr diff <mr-iid>
 ```
 
-Use the included read-only helpers when the project path is known:
+Use the included read-only helpers only for failed pipelines/jobs, root-cause analysis, trace-log review, ambiguous CI status, or explicit deep GitLab investigation. For normal GitLab MR review, prefer `glab mr view`, `glab mr diff`, and one CI status lookup before expanding:
 
 ```bash
+python ../../scripts/gitlab_mr_fast_review.py --repo <group/project> --mr-iid <iid> --output gitlab-mr-fast-review.json
 python ../../scripts/gitlab_pipeline_snapshot.py --repo <group/project> --pipeline-id <pipeline-id> --job-id <job-id> --output gitlab-pipeline-snapshot.json
 python ../../scripts/gitlab_mr_snapshot.py --repo <group/project> --mr-iid <iid> --output gitlab-mr-snapshot.json
 ```
@@ -149,13 +150,15 @@ aws configure list-profiles
 aws ec2 describe-regions --query 'Regions[].RegionName' --output text
 ```
 
-Use the included helper for a bounded read-only snapshot when the user asks for a broad AWS check:
+Use the included helpers for bounded read-only AWS evidence. Prefer service-specific deployment snapshots when the user names an ECS service, task, target group, or log group; use the stack snapshot for broad health/performance checks:
 
 ```bash
+python ../../scripts/aws_stack_snapshot.py --region us-east-1 --services ecs,rds,elasticache,s3,cloudfront,route53,lambda,cloudwatch,ecr,cloudtrail --output aws-stack-snapshot.json
+python ../../scripts/aws_deploy_snapshot.py --region us-east-1 --cluster <cluster> --service <service> --output aws-deploy-snapshot.json
 python ../../scripts/aws_infra_snapshot.py --region us-east-1 --output aws-infra-snapshot.json
 ```
 
-Add `--profile <name>` when the user uses named AWS profiles. Add `--services ec2,ecs,rds,lambda,elbv2,cloudwatch` to narrow scope.
+Add `--profile <name>` when the user uses named AWS profiles. Add `--services ecs,rds,elasticache,s3,cloudfront,route53,lambda,cloudwatch,ecr,cloudtrail` to narrow scope.
 
 ## Triage Playbooks
 
@@ -163,6 +166,7 @@ Add `--profile <name>` when the user uses named AWS profiles. Add `--services ec
 
 - Parse the pipeline URL or failed job URL for project, pipeline ID, job ID, branch, commit SHA, and MR IID when present.
 - Use `glab` first to fetch job metadata and the job trace, for example `glab ci trace <job-id> --repo <group/project>` and `glab api projects/<url-encoded-project>/jobs/<job-id>`.
+- This is where heavy GitLab evidence belongs: `gitlab_pipeline_snapshot.py`, pipeline jobs, failed traces, root-cause candidates, relevant MR diff, raw file context, and line-level tracing when needed.
 - Inspect `.gitlab-ci.yml`, included CI files, job rules, stage order, image, services, cache, artifacts, variables references, runner tags, environment, needs/dependencies, and deploy gates.
 - Classify the failure: syntax/config, dependency install, lint/test, build, Docker image, registry auth, artifact/cache, runner capacity, network, permission, IaC plan, deploy, health check, rollback, or external dependency.
 - Compare the failing command with local repo scripts and lockfiles before recommending a fix.
@@ -170,11 +174,14 @@ Add `--profile <name>` when the user uses named AWS profiles. Add `--services ec
 
 ### GitLab Merge Requests
 
-- When the user gives an MR URL, inspect the MR metadata, target/source branches, commits, changed files, pipeline status, approvals, discussions if available, and diff.
+- When the user gives an MR URL, use `gitlab_mr_fast_review.py` or the equivalent fast path by default: `glab auth status`, `glab mr view <iid> --repo <group/project> --output json`, `glab mr diff <iid> --repo <group/project>`, then one pipeline/status call if needed.
 - Review like a senior code reviewer: correctness, security, reliability, maintainability, observability, tests, CI impact, deployment risk, rollback, performance, cost, and best practices.
+- Score the MR out of 100. Start at 100; subtract for critical/high/medium/low findings, failing or missing CI, missing risky tests, and security/performance risk. If score is 60 or higher with no critical/high blocker, say `All good, can merge`. If below 60 or any critical/high blocker exists, say `Do not merge yet` and list the exact reasons.
 - Lead with actionable findings ordered by severity. Use file and line references when available.
 - Separate blockers from suggestions. Do not request broad rewrites unless there is a concrete risk.
-- If local checkout is available, fetch the MR read-only and run the smallest relevant validation:
+- Do not fetch discussions, raw file contents, job traces, or local checkout context unless a fast-pass finding needs proof, CI failed, the diff touches CI/Docker/IaC/security-sensitive code, the MR is very large, or the user asks for a deep review.
+- If the request is "why did pipeline fail" or any deep GitLab root-cause question, route to GitLab Failed Pipelines / heavy GitLab evidence mode instead of normal MR scoring.
+- If local checkout is available and deeper proof is needed, fetch the MR read-only and run the smallest relevant validation:
 
 ```bash
 git fetch origin merge-requests/<mr-iid>/head:mr-<mr-iid>
@@ -185,6 +192,7 @@ git diff --check <target-branch>...mr-<mr-iid>
 ### ECS and Fargate
 
 - Check service events, deployment state, desired/running/pending counts, task definition revision, capacity provider, target group health, CloudWatch logs, CPU/memory reservation, failed tasks, image pull errors, and IAM execution role.
+- Prefer `aws_deploy_snapshot.py` first when cluster/service are known; it now includes ECR image detail, CloudTrail deploy timing, stopped tasks, target health, log tail, and alarm correlation.
 - Read-only commands:
 
 ```bash
@@ -221,15 +229,18 @@ kubectl logs <pod> -n <namespace> --previous
 ### RDS and Databases
 
 - Check instance status, failover, CPU, connections, free storage, IOPS, latency, locks, parameter group changes, backups, maintenance windows, security groups, public access, and version support.
+- For PostgreSQL/RDS plus Redis/ElastiCache broad health checks, use `aws_stack_snapshot.py --services rds,elasticache,cloudwatch,cloudtrail`.
 - Do not run destructive SQL. For query performance, request or inspect safe read-only stats.
 
 ### Lambda and Serverless
 
 - Check recent errors, throttles, duration, concurrency, event source mapping state, DLQs, retries, permissions, package size, runtime, and CloudWatch logs.
+- Use `aws_stack_snapshot.py --services lambda,cloudwatch,cloudtrail` for a quick function inventory and alarm context.
 
-### S3, IAM, and Security
+### S3, CloudFront, Route 53, IAM, and Security
 
-- Check public access blocks, bucket policies, encryption, versioning, lifecycle, access logs, IAM privilege breadth, stale access keys, wildcard actions, public security group ingress, and CloudTrail events.
+- Check public access blocks, bucket policies, encryption, versioning, lifecycle, access logs, CloudFront status/origins/certs, Route 53 hosted zones/records, IAM privilege breadth, stale access keys, wildcard actions, public security group ingress, and CloudTrail events.
+- Use `aws_stack_snapshot.py --services s3,cloudfront,route53,cloudwatch,cloudtrail` for CDN/DNS/storage investigations.
 - Never dump IAM credentials or secret values.
 
 ### Cost and Over-Provisioning
@@ -266,14 +277,18 @@ Risk:
 For GitLab MR reviews:
 
 ```text
+Score:
+Verdict:
+Changes:
 Findings:
 CI/CD:
 Security:
+Performance:
 Reliability:
 Tests:
 Fix:
 Validate:
-Risk:
+Next:
 ```
 
 For broad infrastructure reviews:

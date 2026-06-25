@@ -30,6 +30,8 @@ glab auth status
 python ../../scripts/gitlab_pipeline_snapshot.py --repo <group/project> --pipeline-id <pipeline-id> --job-id <job-id> --output gitlab-pipeline-snapshot.json
 ```
 
+This is the heavy GitLab evidence path. Use it for failed pipelines/jobs, root-cause analysis, trace-log review, ambiguous CI status, or when the user explicitly asks for deep GitLab investigation. It is not the default path for normal MR score/review. Prefer the helper output's `summary.failed_jobs`, `summary.root_cause_candidates`, `evidence.trace_classification`, and `blockers` before reading raw trace text.
+
 4. Inspect local CI context when a checkout exists:
 
 ```bash

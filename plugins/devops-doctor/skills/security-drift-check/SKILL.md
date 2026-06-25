@@ -25,17 +25,17 @@ python ../../scripts/repo_devops_scan.py --root . --output devops-security-scan.
 2. For AWS, capture only needed read-only evidence:
 
 ```bash
-python ../../scripts/aws_infra_snapshot.py --region <region> --services ec2,ecs,rds,lambda,elbv2,cloudwatch --output aws-security-snapshot.json
+python ../../scripts/aws_stack_snapshot.py --region <region> --services ecs,rds,elasticache,s3,cloudfront,route53,lambda,cloudwatch,ecr,cloudtrail --output aws-security-snapshot.json
 ```
 
-3. Check:
+3. Prefer helper `findings`, `evidence`, and `blockers`, then check:
 
-- public SG ingress, public S3, missing encryption/versioning/logging
+- public SG ingress, public S3, missing encryption/versioning/logging, CloudFront TLS/origin exposure, Route 53 risky records
 - IAM wildcard actions/resources and broad trust policies
 - Docker root user, `latest` tags, privileged containers
 - GitLab CI masked/protected variable handling and unsafe deploy rules
 - Terraform public exposure, deletion protection, logging gaps
-- webhook secrets, API tokens, hardcoded credentials, private keys
+- webhook secrets, API tokens, hardcoded credentials, private keys, mobile permissions, and public frontend env-name exposure
 
 ## Output
 

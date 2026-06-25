@@ -48,6 +48,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def summarize_cost(cost_result: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    totals: dict[str, float] = {}
+    data = cost_result.get("data") if cost_result.get("ok") else {}
+    for day in data.get("ResultsByTime", []) if isinstance(data, dict) else []:
+        for group in day.get("Groups", []):
+            service = group.get("Keys", ["unknown"])[0]
+            amount = float(group.get("Metrics", {}).get("UnblendedCost", {}).get("Amount", 0) or 0)
+            totals[service] = totals.get(service, 0.0) + amount
+    top = sorted(totals.items(), key=lambda item: item[1], reverse=True)[:10]
+    findings = [
+        {"severity": "info", "rule": "top_cost_service", "service": service, "amount": round(amount, 4)}
+        for service, amount in top[:5]
+        if amount > 0
+    ]
+    return {"top_services": [{"service": service, "amount": round(amount, 4)} for service, amount in top], "service_count": len(totals)}, findings
+
+
 def main() -> int:
     args = parse_args()
     if not shutil.which("aws"):
@@ -56,7 +73,7 @@ def main() -> int:
 
     end = date.today()
     start = end - timedelta(days=args.days)
-    snapshot = {
+    raw = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "profile": args.profile,
         "region": args.region,
@@ -84,6 +101,26 @@ def main() -> int:
             ),
             timeout=90,
         ),
+    }
+    cost_summary, findings = summarize_cost(raw["service_cost"])
+    blockers = []
+    for key, value in raw.items():
+        if isinstance(value, dict) and value.get("ok") is False:
+            blockers.append({"scope": key, "reason": value.get("error", "command failed")})
+
+    snapshot = {
+        "summary": {
+            "profile": args.profile,
+            "region": args.region,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            **cost_summary,
+        },
+        "findings": findings,
+        "evidence": {"identity": raw.get("identity")},
+        "blockers": blockers,
+        "next_commands": ["aws ce get-cost-and-usage --granularity DAILY --metrics UnblendedCost"],
+        "raw": raw,
     }
 
     payload = json.dumps(snapshot, indent=2, sort_keys=True, default=str)

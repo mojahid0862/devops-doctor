@@ -150,7 +150,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    result: dict[str, Any] = {
+    raw: dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "cwd": str(Path.cwd()),
         "git": git_context(),
@@ -162,11 +162,37 @@ def main() -> int:
         "helm": optional_tool_context("helm", ["helm", "version", "--short"]),
     }
     blockers = []
-    if not result["glab"].get("ready"):
-        blockers.append({"scope": "gitlab", "reason": result["glab"].get("blocker")})
-    if result["aws"].get("available") and not result["aws"].get("ready"):
-        blockers.append({"scope": "aws", "reason": result["aws"].get("blocker")})
-    result["blockers"] = blockers
+    if not raw["glab"].get("ready"):
+        blockers.append({"scope": "gitlab", "reason": raw["glab"].get("blocker")})
+    if raw["aws"].get("available") and not raw["aws"].get("ready"):
+        blockers.append({"scope": "aws", "reason": raw["aws"].get("blocker")})
+    raw["blockers"] = blockers
+    result: dict[str, Any] = {
+        "summary": {
+            "cwd": raw["cwd"],
+            "git_ready": bool(raw["git"].get("inside_work_tree")),
+            "glab_ready": bool(raw["glab"].get("ready")),
+            "aws_ready": bool(raw["aws"].get("ready")),
+            "terraform_available": bool(raw["terraform"].get("available")),
+            "kubectl_available": bool(raw["kubectl"].get("available")),
+            "docker_available": bool(raw["docker"].get("available")),
+            "helm_available": bool(raw["helm"].get("available")),
+        },
+        "findings": [],
+        "evidence": {
+            "git": raw["git"],
+            "glab_path": raw["glab"].get("path"),
+            "aws_path": raw["aws"].get("path"),
+            "aws_profile_env": raw["aws"].get("profile_env"),
+            "aws_region_env": raw["aws"].get("region_env"),
+        },
+        "blockers": blockers,
+        "next_commands": [
+            "glab auth status",
+            "aws sts get-caller-identity",
+        ],
+        "raw": raw,
+    }
 
     payload = json.dumps(result, indent=2, sort_keys=True, default=str)
     if args.output:

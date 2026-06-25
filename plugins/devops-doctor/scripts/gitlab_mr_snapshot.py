@@ -90,6 +90,39 @@ def api_project(repo: str, *parts: str) -> str:
     return "/".join(["projects", quote(repo, safe=""), *[str(part).strip("/") for part in parts]])
 
 
+def changed_paths(changes_result: dict[str, Any]) -> list[str]:
+    data = changes_result.get("data") if changes_result.get("ok") else {}
+    changes = data.get("changes", []) if isinstance(data, dict) else []
+    return [item.get("new_path") or item.get("old_path") for item in changes if isinstance(item, dict)]
+
+
+def summarize(snapshot: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    mr = snapshot.get("merge_request", {}).get("data") if isinstance(snapshot.get("merge_request"), dict) else {}
+    paths = changed_paths(snapshot.get("changes") or {})
+    blockers = [
+        {"scope": key, "reason": value.get("error", "command failed")}
+        for key, value in snapshot.items()
+        if isinstance(value, dict) and value.get("ok") is False
+    ]
+    findings = []
+    for path in paths:
+        lower = str(path).lower()
+        if any(item in lower for item in (".gitlab-ci", "dockerfile", ".tf", "terraform", "iam", "security", ".env")):
+            findings.append({"severity": "medium", "rule": "sensitive_path_changed", "path": path})
+    summary = {
+        "repo": snapshot.get("repo"),
+        "mr_iid": snapshot.get("mr_iid"),
+        "title": mr.get("title") if isinstance(mr, dict) else None,
+        "state": mr.get("state") if isinstance(mr, dict) else None,
+        "source_branch": mr.get("source_branch") if isinstance(mr, dict) else None,
+        "target_branch": mr.get("target_branch") if isinstance(mr, dict) else None,
+        "sha": mr.get("sha") if isinstance(mr, dict) else None,
+        "changed_files": len(paths),
+        "pipeline_count": len(snapshot.get("pipelines", {}).get("data") or []) if isinstance(snapshot.get("pipelines"), dict) else None,
+    }
+    return summary, findings, blockers
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect read-only GitLab MR evidence using glab only.")
     parser.add_argument("--repo", required=True, help="GitLab project path, for example group/project.")
@@ -121,7 +154,23 @@ def main() -> int:
     if args.include_discussions:
         snapshot["discussions"] = run_glab(glab, ["api", api_project(args.repo, "merge_requests", args.mr_iid, "discussions")])
 
-    payload = json.dumps(snapshot, indent=2, sort_keys=True, default=str)
+    summary, findings, blockers = summarize(snapshot)
+    result = {
+        "summary": summary,
+        "findings": findings,
+        "evidence": {
+            "changed_paths": changed_paths(snapshot.get("changes") or {}),
+            "included_discussions": bool(args.include_discussions),
+        },
+        "blockers": blockers,
+        "next_commands": [
+            f"glab mr view {args.mr_iid} --repo {args.repo} --output json",
+            f"glab mr diff {args.mr_iid} --repo {args.repo}",
+        ],
+        "raw": snapshot,
+    }
+
+    payload = json.dumps(result, indent=2, sort_keys=True, default=str)
     if args.output:
         Path(args.output).write_text(payload + "\n", encoding="utf-8")
     else:

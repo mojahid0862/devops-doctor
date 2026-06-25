@@ -129,9 +129,23 @@ def main() -> int:
         raise SystemExit("Provide --plan-json or --plan-text.")
 
     if args.plan_json:
-        result = analyze_json(json.loads(Path(args.plan_json).read_text(encoding="utf-8")))
+        raw = analyze_json(json.loads(Path(args.plan_json).read_text(encoding="utf-8-sig")))
+        evidence = {"plan_json": args.plan_json, "plan_text": None}
     else:
-        result = analyze_text(Path(args.plan_text).read_text(encoding="utf-8", errors="replace"))
+        raw = analyze_text(Path(args.plan_text).read_text(encoding="utf-8", errors="replace"))
+        evidence = {"plan_json": None, "plan_text": args.plan_text}
+
+    result = {
+        "summary": raw.get("summary", {}),
+        "findings": raw.get("findings", []),
+        "evidence": evidence,
+        "blockers": [],
+        "next_commands": [
+            "terraform plan -out=tfplan",
+            "terraform show -json tfplan",
+        ],
+        "raw": raw,
+    }
 
     payload = json.dumps(result, indent=2, sort_keys=True, default=str)
     if args.output:

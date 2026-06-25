@@ -34,6 +34,10 @@ Use the result to decide:
 - AWS ready: use AWS CLI read-only commands and snapshot helpers.
 - Repo ready: inspect local CI, Docker, Terraform, Kubernetes, and app config.
 - Blocked: report the exact failing tool/auth/permission and stop that branch.
+- For normal MR URLs, use `gitlab_mr_fast_review.py` before any heavy GitLab evidence.
+- For failed pipelines/jobs or "why failed" requests, use `gitlab_pipeline_snapshot.py` and its root-cause candidates.
+- For broad AWS stack checks, use `aws_stack_snapshot.py` with the smallest service allowlist matching the request.
+- For ECS/Fargate incidents with cluster/service details, use `aws_deploy_snapshot.py` first.
 
 ## Routing
 
