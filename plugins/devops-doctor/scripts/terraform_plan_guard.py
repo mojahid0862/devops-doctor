@@ -55,14 +55,19 @@ def contains_iam_wildcard(value: Any) -> bool:
 
 
 def action_label(actions: list[str]) -> str:
-    if actions == ["delete", "create"]:
+    if sorted(actions) == ["create", "delete"]:
         return "replace"
     return ",".join(actions)
 
 
 def analyze_json(plan: dict[str, Any]) -> dict[str, Any]:
     findings: list[dict[str, Any]] = []
+    finding_addresses: set[Any] = set()
     counts = {"create": 0, "update": 0, "delete": 0, "replace": 0, "read": 0}
+
+    def add_finding(finding: dict[str, Any]) -> None:
+        findings.append(finding)
+        finding_addresses.add(finding.get("address"))
 
     for change in plan.get("resource_changes", []):
         address = change.get("address")
@@ -78,26 +83,26 @@ def analyze_json(plan: dict[str, Any]) -> dict[str, Any]:
                 counts[action] += 1
 
         if "delete" in actions:
-            findings.append({"severity": "high", "rule": "destructive_change", "address": address, "type": resource_type, "actions": actions})
-        if actions == ["delete", "create"]:
-            findings.append({"severity": "high", "rule": "replacement", "address": address, "type": resource_type, "actions": actions})
+            add_finding({"severity": "high", "rule": "destructive_change", "address": address, "type": resource_type, "actions": actions})
+        if sorted(actions) == ["create", "delete"]:
+            add_finding({"severity": "high", "rule": "replacement", "address": address, "type": resource_type, "actions": actions})
         if resource_type in {"aws_security_group", "aws_security_group_rule"} and contains_open_cidr(after):
-            findings.append({"severity": "high", "rule": "public_network_ingress_or_rule", "address": address, "type": resource_type})
+            add_finding({"severity": "high", "rule": "public_network_ingress_or_rule", "address": address, "type": resource_type})
         if resource_type and resource_type.startswith("aws_iam_") and contains_iam_wildcard(after):
-            findings.append({"severity": "high", "rule": "iam_wildcard", "address": address, "type": resource_type})
+            add_finding({"severity": "high", "rule": "iam_wildcard", "address": address, "type": resource_type})
         if resource_type == "aws_s3_bucket_acl" and json.dumps(after, default=str).lower().find("public") >= 0:
-            findings.append({"severity": "high", "rule": "public_s3_acl", "address": address, "type": resource_type})
+            add_finding({"severity": "high", "rule": "public_s3_acl", "address": address, "type": resource_type})
         if resource_type == "aws_s3_bucket_public_access_block" and isinstance(after, dict):
             disabled = [key for key, value in after.items() if key.startswith("block_") or key.startswith("ignore_") if value is False]
             if disabled:
-                findings.append({"severity": "medium", "rule": "s3_public_access_block_disabled", "address": address, "disabled": disabled})
+                add_finding({"severity": "medium", "rule": "s3_public_access_block_disabled", "address": address, "disabled": disabled})
         if resource_type in {"aws_db_instance", "aws_rds_cluster"} and isinstance(after, dict):
             if after.get("deletion_protection") is False:
-                findings.append({"severity": "medium", "rule": "rds_deletion_protection_disabled", "address": address, "type": resource_type})
+                add_finding({"severity": "medium", "rule": "rds_deletion_protection_disabled", "address": address, "type": resource_type})
             if after.get("publicly_accessible") is True:
-                findings.append({"severity": "high", "rule": "rds_publicly_accessible", "address": address, "type": resource_type})
-        if resource_type in RISK_TYPES and before != after and not any(item.get("address") == address for item in findings):
-            findings.append({"severity": "info", "rule": "sensitive_resource_changed", "address": address, "type": resource_type, "actions": actions})
+                add_finding({"severity": "high", "rule": "rds_publicly_accessible", "address": address, "type": resource_type})
+        if resource_type in RISK_TYPES and before != after and address not in finding_addresses:
+            add_finding({"severity": "info", "rule": "sensitive_resource_changed", "address": address, "type": resource_type, "actions": actions})
 
     return {"summary": counts, "findings": findings}
 

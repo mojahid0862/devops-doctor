@@ -1,6 +1,6 @@
 ---
 name: security-drift-check
-description: Check cloud, GitLab CI/CD, Docker, Kubernetes, Terraform, IAM, S3, security groups, secrets handling, public exposure, dependency supply chain, and observability security drift without exposing secret values. Use when the user asks for DevOps security review, drift check, hardening, OWASP/cloud risk, or safe production posture.
+description: Check cloud, GitLab CI/CD, Docker, Kubernetes, Terraform, IAM, S3, CloudFront, Route 53, ElastiCache/Redis, security groups, secrets handling, public exposure, dependency supply chain, and observability security drift without exposing secret values. Use when the user asks for DevOps security review, drift check, hardening, OWASP/cloud risk, or safe production posture.
 ---
 
 # Security Drift Check
@@ -30,7 +30,7 @@ python ../../scripts/aws_stack_snapshot.py --region <region> --services ecs,rds,
 
 3. Prefer helper `findings`, `evidence`, and `blockers`, then check:
 
-- public SG ingress, public S3, missing encryption/versioning/logging, CloudFront TLS/origin exposure, Route 53 risky records
+- public SG ingress, public S3, missing encryption/versioning/logging, CloudFront TLS/origin exposure, Route 53 risky records, ElastiCache/Redis public or broad SG exposure
 - IAM wildcard actions/resources and broad trust policies
 - Docker root user, `latest` tags, privileged containers
 - GitLab CI masked/protected variable handling and unsafe deploy rules

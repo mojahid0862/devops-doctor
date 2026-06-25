@@ -19,7 +19,7 @@ description: Diagnose ECS and Fargate service failures, stopped tasks, unhealthy
 2. Capture service evidence:
 
 ```bash
-python ../../scripts/aws_deploy_snapshot.py --region <region> --cluster <cluster> --service <service> --target-group-arn <tg-arn> --log-group <log-group> --output ecs-snapshot.json
+python ../../scripts/aws_deploy_snapshot.py --region <region> --cluster <cluster> --service <service> --target-group-arn <tg-arn> --log-group <log-group> --since 2h --output ecs-snapshot.json
 ```
 
 3. Prefer the helper output's `summary`, `findings`, `evidence.deployment_correlation`, and `blockers`, then check:

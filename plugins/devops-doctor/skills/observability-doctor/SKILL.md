@@ -1,6 +1,6 @@
 ---
 name: observability-doctor
-description: Diagnose incidents using logs, metrics, traces, alerts, SLOs, CloudWatch, Grafana, New Relic, ALB target health, ECS events, Kubernetes events, application logs, and deployment timelines. Use when the user gives an outage, alert, latency spike, error spike, noisy monitor, missing dashboard, or asks what to check in observability.
+description: Diagnose incidents using logs, metrics, traces, alerts, SLOs, CloudWatch, Grafana, New Relic, ALB target health, CloudFront/Route 53 signals, ElastiCache/Redis health, ECS events, Kubernetes events, application logs, and deployment timelines. Use when the user gives an outage, alert, latency spike, error spike, noisy monitor, missing dashboard, or asks what to check in observability.
 ---
 
 # Observability Doctor
@@ -21,7 +21,7 @@ description: Diagnose incidents using logs, metrics, traces, alerts, SLOs, Cloud
 ```bash
 aws cloudwatch describe-alarms --state-value ALARM
 aws logs tail <log-group> --since 2h
-python ../../scripts/aws_stack_snapshot.py --region <region> --services ecs,rds,elasticache,lambda,cloudwatch,cloudtrail --since 2h --output observability-stack-snapshot.json
+python ../../scripts/aws_stack_snapshot.py --region <region> --services ecs,rds,elasticache,cloudfront,route53,lambda,cloudwatch,cloudtrail --since 2h --output observability-stack-snapshot.json
 ```
 
 3. Prefer helper `summary`, `findings`, and `blockers`, then check:
@@ -29,8 +29,9 @@ python ../../scripts/aws_stack_snapshot.py --region <region> --services ecs,rds,
 - golden signals: latency, traffic, errors, saturation
 - deploy markers and GitLab pipeline timing
 - ALB 4xx/5xx, target response time, target health
+- CloudFront 4xx/5xx, cache hit rate, origin latency, Route 53 health checks, DNS TTL/change timing
 - ECS task restarts, OOM, CPU/memory, health check failures
-- DB connections, CPU, locks, storage, failovers, Redis/ElastiCache failover or connection pressure
+- DB connections, CPU, locks, storage, failovers, Redis/ElastiCache failover, evictions, memory, or connection pressure
 - missing alerts, noisy alerts, no runbook, no rollback signal
 
 ## Output

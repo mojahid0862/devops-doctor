@@ -9,15 +9,27 @@ import re
 import shutil
 import subprocess
 import sys
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 SECRET_PATTERNS = [
     (re.compile(r"(?i)(token|password|passwd|secret|key)(\s*[:=]\s*)([^\s\"']+)"), r"\1\2[REDACTED]"),
     (re.compile(r"AKIA[0-9A-Z]{16}"), "[REDACTED_AWS_ACCESS_KEY_ID]"),
     (re.compile(r"(?i)aws_secret_access_key\s*=\s*[^\s]+"), "aws_secret_access_key=[REDACTED]"),
+]
+
+THROTTLING_NOTE = "Lower --max-workers if AWS API throttling appears."
+
+RDS_METRICS = [
+    "CPUUtilization",
+    "DatabaseConnections",
+    "FreeableMemory",
+    "FreeStorageSpace",
+    "ReadLatency",
+    "WriteLatency",
 ]
 
 
@@ -43,7 +55,7 @@ def scoped(base: list[str], profile: str | None, region: str | None) -> list[str
 
 def run(command: list[str], *, timeout: int = 60, parse_json: bool = True) -> dict[str, Any]:
     try:
-        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout)
+        completed = subprocess.run(command, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "timeout", "command": command_text(command)}
 
@@ -67,6 +79,25 @@ def aws_json(base: list[str], profile: str | None, region: str | None, timeout: 
     return run([*scoped(base, profile, region), "--output", "json"], timeout=timeout)
 
 
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be >= 1")
+    return parsed
+
+
+def run_tier(executor: ThreadPoolExecutor, tasks: dict[str, Callable[[], Any]]) -> dict[str, Any]:
+    futures: dict[Future[Any], str] = {executor.submit(task): key for key, task in tasks.items()}
+    results: dict[str, Any] = {}
+    for future in as_completed(futures):
+        key = futures[future]
+        try:
+            results[key] = future.result()
+        except Exception as exc:  # Defensive: keep snapshot JSON complete on local orchestration errors.
+            results[key] = {"ok": False, "error": redact(str(exc)), "command": "internal"}
+    return results
+
+
 def since_to_start(value: str) -> str:
     match = re.fullmatch(r"(\d+)([hmHdD])", value.strip())
     if not match:
@@ -87,6 +118,155 @@ def parse_ecr_image(image: str) -> dict[str, str] | None:
     if not match:
         return None
     return {key: value for key, value in match.groupdict().items() if value}
+
+
+def metric_window(minutes: int = 30) -> tuple[str, str]:
+    end = datetime.now(timezone.utc).replace(microsecond=0)
+    start = end - timedelta(minutes=minutes)
+    return start.isoformat(), end.isoformat()
+
+
+def collect_cloudwatch_metrics(
+    namespace: str,
+    dimensions: dict[str, str],
+    metrics: list[str],
+    profile: str | None,
+    region: str | None,
+    *,
+    minutes: int = 30,
+    period: int = 60,
+) -> dict[str, Any]:
+    start, end = metric_window(minutes)
+    dimension_args = [f"Name={name},Value={value}" for name, value in dimensions.items()]
+    return {
+        "namespace": namespace,
+        "dimensions": dimensions,
+        "window_minutes": minutes,
+        "period_seconds": period,
+        "metrics": {
+            metric: aws_json(
+                [
+                    "cloudwatch",
+                    "get-metric-statistics",
+                    "--namespace",
+                    namespace,
+                    "--metric-name",
+                    metric,
+                    "--dimensions",
+                    *dimension_args,
+                    "--start-time",
+                    start,
+                    "--end-time",
+                    end,
+                    "--period",
+                    str(period),
+                    "--statistics",
+                    "Average",
+                    "Maximum",
+                    "--query",
+                    "Datapoints[].{Timestamp:Timestamp,Average:Average,Maximum:Maximum,Unit:Unit}",
+                ],
+                profile,
+                region,
+                timeout=45,
+            )
+            for metric in metrics
+        },
+    }
+
+
+def collect_rds_db_instance(identifier: str, profile: str | None, region: str | None) -> dict[str, Any]:
+    return {
+        "db_instance_identifier": identifier,
+        "status": aws_json(
+            [
+                "rds",
+                "describe-db-instances",
+                "--db-instance-identifier",
+                identifier,
+                "--query",
+                "DBInstances[].{DBInstanceIdentifier:DBInstanceIdentifier,DBInstanceStatus:DBInstanceStatus,Engine:Engine,EngineVersion:EngineVersion,DBInstanceClass:DBInstanceClass,MultiAZ:MultiAZ,PubliclyAccessible:PubliclyAccessible,StorageEncrypted:StorageEncrypted,AllocatedStorage:AllocatedStorage,Endpoint:Endpoint.Address,LatestRestorableTime:LatestRestorableTime,PendingModifiedValues:PendingModifiedValues}",
+            ],
+            profile,
+            region,
+        ),
+        "cloudwatch_metrics": collect_cloudwatch_metrics(
+            "AWS/RDS",
+            {"DBInstanceIdentifier": identifier},
+            RDS_METRICS,
+            profile,
+            region,
+        ),
+    }
+
+
+def collect_elasticache_cache_cluster(cluster_id: str, profile: str | None, region: str | None) -> dict[str, Any]:
+    return aws_json(
+        [
+            "elasticache",
+            "describe-cache-clusters",
+            "--cache-cluster-id",
+            cluster_id,
+            "--show-cache-node-info",
+            "--query",
+            "CacheClusters[].{CacheClusterId:CacheClusterId,Engine:Engine,CacheClusterStatus:CacheClusterStatus,NumCacheNodes:NumCacheNodes,PreferredAvailabilityZone:PreferredAvailabilityZone,CacheNodeType:CacheNodeType,CacheNodes:CacheNodes[].{CacheNodeId:CacheNodeId,CacheNodeStatus:CacheNodeStatus,Endpoint:Endpoint.Address},SecurityGroups:SecurityGroups,VpcSecurityGroups:VpcSecurityGroups}",
+        ],
+        profile,
+        region,
+    )
+
+
+def collect_elasticache_replication_group(replication_group_id: str, profile: str | None, region: str | None) -> dict[str, Any]:
+    return aws_json(
+        [
+            "elasticache",
+            "describe-replication-groups",
+            "--replication-group-id",
+            replication_group_id,
+            "--query",
+            "ReplicationGroups[].{ReplicationGroupId:ReplicationGroupId,Status:Status,Description:Description,AutomaticFailover:AutomaticFailover,MultiAZ:MultiAZ,AtRestEncryptionEnabled:AtRestEncryptionEnabled,TransitEncryptionEnabled:TransitEncryptionEnabled,NodeGroups:NodeGroups[].{Status:Status,PrimaryEndpoint:PrimaryEndpoint.Address,ReaderEndpoint:ReaderEndpoint.Address,NodeGroupMembers:NodeGroupMembers[].{CacheClusterId:CacheClusterId,CurrentRole:CurrentRole,PreferredAvailabilityZone:PreferredAvailabilityZone}}}",
+        ],
+        profile,
+        region,
+    )
+
+
+def collect_cloudfront_distribution(distribution_id: str, profile: str | None) -> dict[str, Any]:
+    return aws_json(
+        [
+            "cloudfront",
+            "get-distribution",
+            "--id",
+            distribution_id,
+            "--query",
+            "Distribution.{Id:Id,ARN:ARN,Status:Status,DomainName:DomainName,Enabled:DistributionConfig.Enabled,LastModifiedTime:LastModifiedTime,DefaultRootObject:DistributionConfig.DefaultRootObject,Origins:DistributionConfig.Origins.Items[].{Id:Id,DomainName:DomainName},Aliases:DistributionConfig.Aliases.Items}",
+        ],
+        profile,
+        None,
+    )
+
+
+def collect_route53_hosted_zone(hosted_zone_id: str, profile: str | None) -> dict[str, Any]:
+    return aws_json(
+        [
+            "route53",
+            "get-hosted-zone",
+            "--id",
+            hosted_zone_id,
+            "--query",
+            "{HostedZone:HostedZone,DelegationSet:DelegationSet,VPCs:VPCs}",
+        ],
+        profile,
+        None,
+    )
+
+
+def collect_route53_health_check_status(health_check_id: str, profile: str | None) -> dict[str, Any]:
+    return aws_json(
+        ["route53", "get-health-check-status", "--health-check-id", health_check_id],
+        profile,
+        None,
+    )
 
 
 def collect_ecr_images(task_definition: dict[str, Any], profile: str | None, region: str | None) -> list[dict[str, Any]]:
@@ -114,6 +294,49 @@ def collect_ecr_images(task_definition: dict[str, Any], profile: str | None, reg
             }
         )
     return images
+
+
+def stopped_task_arns(stopped_tasks: Any) -> list[str]:
+    if not isinstance(stopped_tasks, dict) or not stopped_tasks.get("ok"):
+        return []
+    data = stopped_tasks.get("data")
+    if not isinstance(data, dict):
+        return []
+    task_arns = data.get("taskArns", [])
+    return [str(task_arn) for task_arn in task_arns[:10]]
+
+
+def task_definition_from_snapshot(snapshot: dict[str, Any]) -> str | None:
+    service_data = snapshot.get("ecs_service", {}).get("data") if isinstance(snapshot.get("ecs_service"), dict) else None
+    if isinstance(service_data, list) and service_data:
+        task_definition = service_data[0].get("taskDefinition")
+        if task_definition:
+            return str(task_definition)
+
+    for key in ("ecs_task", "ecs_stopped_task_details"):
+        task_data = snapshot.get(key, {}).get("data") if isinstance(snapshot.get(key), dict) else None
+        if not isinstance(task_data, list):
+            continue
+        for task in task_data:
+            task_definition = task.get("taskDefinitionArn")
+            if task_definition:
+                return str(task_definition)
+    return None
+
+
+def collect_ecs_task_definition(task_definition: str, profile: str | None, region: str | None) -> dict[str, Any]:
+    return aws_json(
+        [
+            "ecs",
+            "describe-task-definition",
+            "--task-definition",
+            task_definition,
+            "--query",
+            "taskDefinition.{taskDefinitionArn:taskDefinitionArn,networkMode:networkMode,requiresCompatibilities:requiresCompatibilities,cpu:cpu,memory:memory,executionRoleArn:executionRoleArn,taskRoleArn:taskRoleArn,containerDefinitions:containerDefinitions[].{name:name,image:image,cpu:cpu,memory:memory,portMappings:portMappings,essential:essential,healthCheck:healthCheck,logConfiguration:logConfiguration.options}}",
+        ],
+        profile,
+        region,
+    )
 
 
 def summarize(snapshot: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -163,6 +386,12 @@ def summarize(snapshot: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, 
             "log_tail_checked": bool(snapshot.get("log_tail")),
             "ecr_images_checked": len(snapshot.get("ecr_images") or []),
             "cloudtrail_events_checked": bool(snapshot.get("cloudtrail_events")),
+            "rds_db_instance_checked": bool(snapshot.get("rds_db_instance")),
+            "elasticache_cache_cluster_checked": bool(snapshot.get("elasticache_cache_cluster")),
+            "elasticache_replication_group_checked": bool(snapshot.get("elasticache_replication_group")),
+            "cloudfront_distribution_checked": bool(snapshot.get("cloudfront_distribution")),
+            "route53_hosted_zone_checked": bool(snapshot.get("route53_hosted_zone")),
+            "route53_health_check_status_checked": bool(snapshot.get("route53_health_check_status")),
             "finding_count": len(findings),
         },
         findings,
@@ -181,6 +410,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-group", help="CloudWatch log group to tail.")
     parser.add_argument("--since", default="2h", help="CloudWatch logs tail window, for example 2h.")
     parser.add_argument("--output", help="Write JSON snapshot to this path.")
+    parser.add_argument("--max-workers", type=positive_int, default=8, help=f"Max concurrent AWS CLI checks. {THROTTLING_NOTE}")
+    parser.add_argument("--db-instance", help="RDS DB instance identifier.")
+    parser.add_argument("--cache-cluster", help="ElastiCache cache cluster identifier.")
+    parser.add_argument("--replication-group", help="ElastiCache replication group identifier.")
+    parser.add_argument("--distribution-id", help="CloudFront distribution ID.")
+    parser.add_argument("--hosted-zone-id", help="Route53 hosted zone ID.")
+    parser.add_argument("--health-check-id", help="Route53 health check ID.")
     return parser.parse_args()
 
 
@@ -194,14 +430,28 @@ def main() -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "profile": args.profile,
         "region": args.region,
-        "identity": aws_json(["sts", "get-caller-identity"], args.profile, None),
+        "identity": None,
         "ecs_service": None,
         "ecs_stopped_tasks": None,
         "ecs_task": None,
+        "ecs_stopped_task_details": None,
         "ecs_task_definition": None,
         "target_health": None,
         "log_tail": None,
-        "alarms": aws_json(
+        "alarms": None,
+        "cloudtrail_events": None,
+        "rds_db_instance": None,
+        "elasticache_cache_cluster": None,
+        "elasticache_replication_group": None,
+        "cloudfront_distribution": None,
+        "route53_hosted_zone": None,
+        "route53_health_check_status": None,
+        "collection": {"max_workers": args.max_workers, "throttling_note": THROTTLING_NOTE},
+    }
+
+    tier1: dict[str, Callable[[], Any]] = {
+        "identity": lambda: aws_json(["sts", "get-caller-identity"], args.profile, None),
+        "alarms": lambda: aws_json(
             [
                 "cloudwatch",
                 "describe-alarms",
@@ -213,10 +463,25 @@ def main() -> int:
             args.profile,
             args.region,
         ),
+        "cloudtrail_events": lambda: aws_json(
+            [
+                "cloudtrail",
+                "lookup-events",
+                "--start-time",
+                since_to_start(args.since),
+                "--max-results",
+                "50",
+                "--query",
+                "Events[?EventSource=='ecs.amazonaws.com' || EventSource=='ecr.amazonaws.com' || EventSource=='elasticloadbalancing.amazonaws.com'].{EventTime:EventTime,EventName:EventName,Username:Username,EventSource:EventSource,ResourceName:Resources[0].ResourceName}",
+            ],
+            args.profile,
+            args.region,
+            timeout=60,
+        ),
     }
 
     if args.cluster and args.service:
-        snapshot["ecs_service"] = aws_json(
+        tier1["ecs_service"] = lambda: aws_json(
             [
                 "ecs",
                 "describe-services",
@@ -230,7 +495,7 @@ def main() -> int:
             args.profile,
             args.region,
         )
-        stopped = aws_json(
+        tier1["ecs_stopped_tasks"] = lambda: aws_json(
             [
                 "ecs",
                 "list-tasks",
@@ -246,93 +511,95 @@ def main() -> int:
             args.profile,
             args.region,
         )
-        snapshot["ecs_stopped_tasks"] = stopped
-        task_arns = []
-        if stopped.get("ok"):
-            task_arns = stopped.get("data", {}).get("taskArns", [])
-        if task_arns:
-            snapshot["ecs_task"] = aws_json(
-                [
-                    "ecs",
-                    "describe-tasks",
-                    "--cluster",
-                    args.cluster,
-                    "--tasks",
-                    *task_arns[:10],
-                    "--query",
-                    "tasks[].{taskArn:taskArn,lastStatus:lastStatus,desiredStatus:desiredStatus,stopCode:stopCode,stoppedReason:stoppedReason,containers:containers[].{name:name,lastStatus:lastStatus,exitCode:exitCode,reason:reason,healthStatus:healthStatus,image:image},createdAt:createdAt,startedAt:startedAt,stoppedAt:stoppedAt}",
-                ],
-                args.profile,
-                args.region,
-            )
-
-    if args.cluster and args.task_arn:
-        snapshot["ecs_task"] = aws_json(
-            [
-                "ecs",
-                "describe-tasks",
-                "--cluster",
-                args.cluster,
-                "--tasks",
-                args.task_arn,
-                "--query",
-                "tasks[].{taskArn:taskArn,lastStatus:lastStatus,desiredStatus:desiredStatus,stopCode:stopCode,stoppedReason:stoppedReason,containers:containers[].{name:name,lastStatus:lastStatus,exitCode:exitCode,reason:reason,healthStatus:healthStatus,image:image},taskDefinitionArn:taskDefinitionArn,createdAt:createdAt,startedAt:startedAt,stoppedAt:stoppedAt}",
-            ],
-            args.profile,
-            args.region,
-        )
-
-    task_definition = None
-    service_data = snapshot.get("ecs_service", {}).get("data") if isinstance(snapshot.get("ecs_service"), dict) else None
-    if service_data:
-        task_definition = service_data[0].get("taskDefinition") if service_data else None
-    task_data = snapshot.get("ecs_task", {}).get("data") if isinstance(snapshot.get("ecs_task"), dict) else None
-    if not task_definition and task_data:
-        task_definition = task_data[0].get("taskDefinitionArn") if task_data else None
-    if task_definition:
-        snapshot["ecs_task_definition"] = aws_json(
-            [
-                "ecs",
-                "describe-task-definition",
-                "--task-definition",
-                task_definition,
-                "--query",
-                "taskDefinition.{taskDefinitionArn:taskDefinitionArn,networkMode:networkMode,requiresCompatibilities:requiresCompatibilities,cpu:cpu,memory:memory,executionRoleArn:executionRoleArn,taskRoleArn:taskRoleArn,containerDefinitions:containerDefinitions[].{name:name,image:image,cpu:cpu,memory:memory,portMappings:portMappings,essential:essential,healthCheck:healthCheck,logConfiguration:logConfiguration.options}}",
-            ],
-            args.profile,
-            args.region,
-        )
-        snapshot["ecr_images"] = collect_ecr_images(snapshot["ecs_task_definition"], args.profile, args.region)
 
     if args.target_group_arn:
-        snapshot["target_health"] = aws_json(
+        tier1["target_health"] = lambda: aws_json(
             ["elbv2", "describe-target-health", "--target-group-arn", args.target_group_arn],
             args.profile,
             args.region,
         )
 
     if args.log_group:
-        snapshot["log_tail"] = run(
+        tier1["log_tail"] = lambda: run(
             scoped(["logs", "tail", args.log_group, "--since", args.since, "--format", "short"], args.profile, args.region),
             timeout=90,
             parse_json=False,
         )
 
-    snapshot["cloudtrail_events"] = aws_json(
-        [
-            "cloudtrail",
-            "lookup-events",
-            "--start-time",
-            since_to_start(args.since),
-            "--max-results",
-            "50",
-            "--query",
-            "Events[?EventSource=='ecs.amazonaws.com' || EventSource=='ecr.amazonaws.com' || EventSource=='elasticloadbalancing.amazonaws.com'].{EventTime:EventTime,EventName:EventName,Username:Username,EventSource:EventSource,ResourceName:Resources[0].ResourceName}",
-        ],
-        args.profile,
-        args.region,
-        timeout=60,
-    )
+    if args.db_instance:
+        tier1["rds_db_instance"] = lambda: collect_rds_db_instance(args.db_instance, args.profile, args.region)
+    if args.cache_cluster:
+        tier1["elasticache_cache_cluster"] = lambda: collect_elasticache_cache_cluster(args.cache_cluster, args.profile, args.region)
+    if args.replication_group:
+        tier1["elasticache_replication_group"] = lambda: collect_elasticache_replication_group(args.replication_group, args.profile, args.region)
+    if args.distribution_id:
+        tier1["cloudfront_distribution"] = lambda: collect_cloudfront_distribution(args.distribution_id, args.profile)
+    if args.hosted_zone_id:
+        tier1["route53_hosted_zone"] = lambda: collect_route53_hosted_zone(args.hosted_zone_id, args.profile)
+    if args.health_check_id:
+        tier1["route53_health_check_status"] = lambda: collect_route53_health_check_status(args.health_check_id, args.profile)
+
+    with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+        snapshot.update(run_tier(executor, tier1))
+
+        task_query = (
+            "tasks[].{taskArn:taskArn,lastStatus:lastStatus,desiredStatus:desiredStatus,stopCode:stopCode,"
+            "stoppedReason:stoppedReason,containers:containers[].{name:name,lastStatus:lastStatus,exitCode:exitCode,"
+            "reason:reason,healthStatus:healthStatus,image:image},taskDefinitionArn:taskDefinitionArn,createdAt:createdAt,"
+            "startedAt:startedAt,stoppedAt:stoppedAt}"
+        )
+        tier2: dict[str, Callable[[], Any]] = {}
+        task_arns = stopped_task_arns(snapshot.get("ecs_stopped_tasks"))
+        if args.cluster and task_arns:
+            stopped_task_key = "ecs_stopped_task_details" if args.task_arn else "ecs_task"
+            tier2[stopped_task_key] = lambda task_arns=task_arns: aws_json(
+                [
+                    "ecs",
+                    "describe-tasks",
+                    "--cluster",
+                    args.cluster,
+                    "--tasks",
+                    *task_arns,
+                    "--query",
+                    task_query,
+                ],
+                args.profile,
+                args.region,
+            )
+
+        if args.cluster and args.task_arn:
+            tier2["ecs_task"] = lambda: aws_json(
+                [
+                    "ecs",
+                    "describe-tasks",
+                    "--cluster",
+                    args.cluster,
+                    "--tasks",
+                    args.task_arn,
+                    "--query",
+                    task_query,
+                ],
+                args.profile,
+                args.region,
+            )
+
+        task_definition = task_definition_from_snapshot(snapshot)
+        if task_definition:
+            tier2["ecs_task_definition"] = lambda task_definition=task_definition: collect_ecs_task_definition(task_definition, args.profile, args.region)
+
+        snapshot.update(run_tier(executor, tier2))
+
+        if not snapshot.get("ecs_task_definition"):
+            task_definition = task_definition_from_snapshot(snapshot)
+            if task_definition:
+                snapshot.update(
+                    run_tier(
+                        executor,
+                        {"ecs_task_definition": lambda task_definition=task_definition: collect_ecs_task_definition(task_definition, args.profile, args.region)},
+                    )
+                )
+        if snapshot.get("ecs_task_definition"):
+            snapshot["ecr_images"] = collect_ecr_images(snapshot["ecs_task_definition"], args.profile, args.region)
 
     summary, findings, blockers = summarize(snapshot)
     result = {
@@ -346,6 +613,16 @@ def main() -> int:
                 "target_group_arn": args.target_group_arn,
                 "log_group": args.log_group,
                 "since": args.since,
+                "db_instance": args.db_instance,
+                "cache_cluster": args.cache_cluster,
+                "replication_group": args.replication_group,
+                "distribution_id": args.distribution_id,
+                "hosted_zone_id": args.hosted_zone_id,
+                "health_check_id": args.health_check_id,
+            },
+            "collection": {
+                "max_workers": args.max_workers,
+                "throttling_note": THROTTLING_NOTE,
             },
         },
         "blockers": blockers,
