@@ -1,11 +1,11 @@
 ---
 name: devops-doctor
-description: Route broad backend health checks and cross-service DevOps investigations involving GitLab delivery, AWS incidents, infrastructure cost, security, or Terraform. Use for requests to check all backends or multiple resource types; use the narrower specialist directly when the failure domain is already clear.
+description: Route DevOps tasks across code review, GitLab delivery, AWS incidents and health, infrastructure cost, security, and Terraform. Apply shared task assessment and adaptive delegation across domains, then select the relevant specialist.
 ---
 
 # DevOps Doctor
 
-Read [the shared evidence contract](references/evidence-contract.md). For a broad backend health request, route to `$devops-team` before detailed collection, even when the user never says "agents". Otherwise choose the narrowest useful specialist; do not load every skill or run a full inventory for a narrow incident.
+Read [the shared evidence contract](references/evidence-contract.md). Every task starts with scope/evidence assessment and a team-sizing decision. Use `$devops-team` before detailed work whenever independent branches or useful independent review justify workers, regardless of task domain or an explicit agents request. Choose the relevant specialist for each branch. Small or strictly dependent tasks stay direct; do not load every skill or collect unrelated inventory.
 
 | User goal | Specialist |
 | --- | --- |
@@ -26,7 +26,7 @@ Read [the shared evidence contract](references/evidence-contract.md). For a broa
 
 1. Resolve the requested account/region/resource or GitLab project/MR/job. Inspect relevant local configuration; it describes intended state, not proof of deployed state.
 2. Check readiness only for the selected scope when unknown. Reuse readiness within the investigation; invalidate after auth failure or a context change. Do not run preflight immediately before a helper that already checks the same authentication.
-3. Fetch the smallest useful evidence set. For broad backend checks, the main agent discovers and shares a shallow resource map, assigns independent resource groups to native subagents, and combines their health reports. Start dispatch as groups become ready; do not finish every resource check before delegating. Use direct work for small scopes and state the specific limitation when workers are unavailable. Concurrent API calls alone do not count as subagents.
+3. Build the smallest useful shared task map from existing evidence: resources, code/diff, jobs, costs, or plan changes as relevant. Assign ready independent branches to native workers and combine their findings. Reuse or add workers when new work becomes ready; do not finish the task serially before assessing delegation. Preserve dependency order, exclusive ownership, and direct handling of tiny tasks. Disclose unavailable capacity; API concurrency alone is not agent participation.
 4. Correlate timestamps before assigning causality. Report observed facts, inference, incomplete coverage, and the next verification separately.
 5. For a requested fix, produce the minimal patch, validation, and rollback. Existing authorization persists; production actions beyond its scope need approval.
 

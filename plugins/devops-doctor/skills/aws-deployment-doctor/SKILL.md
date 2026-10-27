@@ -7,7 +7,7 @@ description: Diagnose AWS deployment failures and production incidents with read
 
 Read [the shared evidence contract](../devops-doctor/references/evidence-contract.md). Resolve `<plugin-root>` from this skill's absolute path; preserve the user repository cwd.
 
-For "check all my backends" or health checks spanning independent resource groups, route to `$devops-team` and its [backend health workflow](../devops-team/references/backend-health.md) before detailed collection. Share one shallow resource map, then delegate resource health checks using available native workers. Keep this specialist direct for a single focused deployment incident.
+For "check all my backends" or health checks spanning independent resource groups, route to `$devops-team` and its [backend health workflow](../devops-team/references/backend-health.md) before detailed collection. Share one shallow resource map, then delegate resource health checks using available native workers. For a single incident, still assess independent runtime/log/delivery questions; work directly when delegation adds no value.
 
 ## Rules
 
@@ -29,7 +29,7 @@ aws sts get-caller-identity
 aws configure list
 ```
 
-3. Use bounded snapshots:
+3. Choose the relevant bounded snapshot or targeted read; these are alternatives, not a checklist to run all three. Limit `--services` to the unresolved question and reuse fresh evidence:
 
 ```bash
 python "<plugin-root>/scripts/aws_deploy_snapshot.py" --region <region> --cluster <cluster> --service <service> --target-group-arn <tg-arn> --log-group <log-group> --since 2h --output aws-deploy-snapshot.json

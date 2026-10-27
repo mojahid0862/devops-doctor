@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.8 — 2026-10-27
+
+- Apply shared task assessment, adaptive delegation, and consolidated validation to every plugin entry point, not only backend health.
+- Reuse task-specific evidence across coding, reviews, CI/CD, cost, security, IaC, and incidents; preserve dependencies, authorization, host limits, and low-token direct handling for small tasks.
+- Remove specialist wording that forced serial incident handling or unrelated broad inventory; share the same coordination contract across all 12 skills.
+
 ## 0.3.7 — 2026-10-27
 
 - Route broad backend health checks to native agent teams before detailed collection, without requiring an explicit agents keyword.

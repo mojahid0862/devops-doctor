@@ -19,12 +19,12 @@ Read [the shared evidence contract](../devops-doctor/references/evidence-contrac
 ## Workflow
 
 1. Establish incident window, service, region, user impact, SLO/SLA, and recent deploy.
-2. Pull the smallest useful evidence:
+2. Reuse fresh evidence and pull only missing signals. Choose the relevant connected-tool read or CLI example below, not all three; bind account/region and narrow alarm names, log groups, and service filters:
 
 ```bash
-aws cloudwatch describe-alarms --state-value ALARM
-aws logs tail <log-group> --since 2h
-python "<plugin-root>/scripts/aws_stack_snapshot.py" --region <region> --services ecs,rds,elasticache,cloudfront,route53,lambda,cloudwatch,cloudtrail --since 2h --output observability-stack-snapshot.json
+aws cloudwatch describe-alarms --region <region> --alarm-names <relevant-alarm-names>
+aws logs tail <log-group> --region <region> --since <window>
+python "<plugin-root>/scripts/aws_stack_snapshot.py" --region <region> --services <relevant-services> --since <window> --output observability-stack-snapshot.json
 ```
 
 3. Prefer helper `summary`, `findings`, and `blockers`, then check:

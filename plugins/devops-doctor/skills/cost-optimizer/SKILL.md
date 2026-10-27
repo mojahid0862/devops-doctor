@@ -24,10 +24,10 @@ Read [the shared evidence contract](../devops-doctor/references/evidence-contrac
 python "<plugin-root>/scripts/aws_cost_snapshot.py" --days 14 --compare-previous --group-by SERVICE,REGION --output aws-cost-snapshot.json
 ```
 
-2. Capture regional infra when region is known:
+2. Fetch only utilization/configuration needed to explain the selected cost groups; knowing a region alone is not a reason for an inventory. If the CLI helper fits, restrict `--services` to those groups, for example:
 
 ```bash
-python "<plugin-root>/scripts/aws_stack_snapshot.py" --region <region> --services ecs,rds,elasticache,s3,cloudfront,route53,lambda,cloudwatch,ecr --output aws-cost-stack-snapshot.json
+python "<plugin-root>/scripts/aws_stack_snapshot.py" --region <region> --services <relevant-services> --output aws-cost-stack-snapshot.json
 ```
 
 3. Prefer helper `summary.top_groups` (or `summary.top_services` for SERVICE-only grouping), `findings`, and `blockers`, then look for:
