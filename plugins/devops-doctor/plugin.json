@@ -1,0 +1,45 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "devops-doctor",
+  "version": "0.3.5",
+  "description": "Read-only DevOps and SRE investigation workflows for GitLab CI/CD, AWS infrastructure, incidents, cost, security drift, observability, and rollback planning.",
+  "author": {
+    "name": "Mojahid Ul Haque",
+    "url": "https://mojahidulhaque.com/"
+  },
+  "homepage": "https://github.com/mojahid0862/devops-doctor",
+  "repository": "https://github.com/mojahid0862/devops-doctor",
+  "keywords": [
+    "devops",
+    "sre",
+    "aws",
+    "gitlab",
+    "terraform",
+    "observability"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "DevOps Doctor",
+        "shortDescription": "Diagnose cloud, CI/CD, and production incidents safely.",
+        "longDescription": "Evidence-led DevOps workflows with scoped readiness checks, bounded parallel collection, current-commit GitLab review gates, shared secret sanitization, Terraform risk analysis, cost comparisons, saved-snapshot drift, and validation/rollback planning. Cloud diagnostics are read-only; production mutations require authorization. DevOps Team coordinates available native subagents with scoped roles, exclusive file/read ownership, dependency ordering, independent review, and offline handoff consistency checks.",
+        "developerName": "Mojahid Ul Haque",
+        "category": "Developer Tools",
+        "capabilities": [
+          "Interactive",
+          "Read"
+        ],
+        "defaultPrompt": [
+          "Diagnose this GitLab or AWS issue using evidence only.",
+          "Review this GitLab merge request and identify deployment risks.",
+          "Investigate this AWS ECS or Fargate failure and provide a safe rollback plan.",
+          "Use $devops-team to investigate this incident with scoped specialists and verify their findings."
+        ],
+        "websiteURL": "https://github.com/mojahid0862/devops-doctor",
+        "brandColor": "#2563EB",
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/icon.png"
+      }
+    }
+  }
+}

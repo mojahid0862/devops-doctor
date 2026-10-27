@@ -5,12 +5,15 @@ description: Diagnose incidents using logs, metrics, traces, alerts, SLOs, Cloud
 
 # Observability Doctor
 
+Read [the shared evidence contract](../devops-doctor/references/evidence-contract.md). Resolve `<plugin-root>` from this skill's absolute path; preserve the user repository cwd.
+
+
 ## Rules
 
 - Read-only first. Do not change alerts, dashboards, sampling, retention, or logging config without explicit approval.
 - Correlate symptoms with deploys, infra events, and dependency status.
 - Avoid dumping sensitive logs; redact secrets and user data.
-- Do not claim incident state, alert status, metrics, or log facts unless it comes from telemetry output, repo config, user-provided evidence, or an explicit blocker.
+- Do not claim incident state, alert status, metrics, or log facts unless it comes from telemetry output, repo config, user-provided evidence. A blocker means evidence is unavailable, not a verified system state.
 - If evidence is missing, write `Unknown:` or `Blocked:` instead of guessing.
 
 ## Workflow
@@ -21,7 +24,7 @@ description: Diagnose incidents using logs, metrics, traces, alerts, SLOs, Cloud
 ```bash
 aws cloudwatch describe-alarms --state-value ALARM
 aws logs tail <log-group> --since 2h
-python ../../scripts/aws_stack_snapshot.py --region <region> --services ecs,rds,elasticache,cloudfront,route53,lambda,cloudwatch,cloudtrail --since 2h --output observability-stack-snapshot.json
+python "<plugin-root>/scripts/aws_stack_snapshot.py" --region <region> --services ecs,rds,elasticache,cloudfront,route53,lambda,cloudwatch,cloudtrail --since 2h --output observability-stack-snapshot.json
 ```
 
 3. Prefer helper `summary`, `findings`, and `blockers`, then check:

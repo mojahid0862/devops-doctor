@@ -12,6 +12,7 @@ import sys
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from doctor_common import run_command, run_ecs_read, emit_result, redact, configure_concurrency
 from typing import Any, Callable
 
 
@@ -33,11 +34,7 @@ RDS_METRICS = [
 ]
 
 
-def redact(text: str) -> str:
-    cleaned = text
-    for pattern, replacement in SECRET_PATTERNS:
-        cleaned = pattern.sub(replacement, cleaned)
-    return cleaned
+
 
 
 def command_text(command: list[str]) -> str:
@@ -54,29 +51,11 @@ def scoped(base: list[str], profile: str | None, region: str | None) -> list[str
 
 
 def run(command: list[str], *, timeout: int = 60, parse_json: bool = True) -> dict[str, Any]:
-    try:
-        completed = subprocess.run(command, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "timeout", "command": command_text(command)}
-
-    stdout = completed.stdout.strip()
-    stderr = completed.stderr.strip()
-    result: dict[str, Any] = {"ok": completed.returncode == 0, "command": command_text(command)}
-    if completed.returncode != 0:
-        result["error"] = redact(stderr or stdout)[-2000:]
-        return result
-    if parse_json:
-        try:
-            result["data"] = json.loads(stdout) if stdout else None
-        except json.JSONDecodeError:
-            result["data"] = redact(stdout)[-4000:]
-    else:
-        result["data"] = redact(stdout)[-12000:]
-    return result
+    return run_command(command, timeout=timeout, parse_json=parse_json, text_limit=None if parse_json else 12000)
 
 
 def aws_json(base: list[str], profile: str | None, region: str | None, timeout: int = 60) -> dict[str, Any]:
-    return run([*scoped(base, profile, region), "--output", "json"], timeout=timeout)
+    return run_ecs_read([*scoped(base, profile, region), "--output", "json"], timeout=timeout)
 
 
 def positive_int(value: str) -> int:
@@ -290,7 +269,7 @@ def collect_ecr_images(task_definition: dict[str, Any], profile: str | None, reg
                 "container": container.get("name"),
                 "image": image,
                 "repository": parsed.get("repo"),
-                "details": aws_json(["ecr", "describe-images", "--repository-name", parsed["repo"], *selector], profile, parsed.get("region") or region, timeout=45),
+                "details": aws_json(["ecr", "describe-images", "--registry-id", parsed["account"], "--repository-name", parsed["repo"], *selector], profile, parsed.get("region") or region, timeout=45),
             }
         )
     return images
@@ -426,11 +405,16 @@ def main() -> int:
         print("aws CLI not found in PATH.", file=sys.stderr)
         return 2
 
+    configure_concurrency(min(args.max_workers, 32))
+    identity = aws_json(["sts", "get-caller-identity"], args.profile, None)
+    if not identity.get("ok"):
+        return emit_result({"status": "failed", "evidence": {"identity": identity}, "blockers": [{"scope": "auth", "reason": identity.get("error")}]}, args.output)
+
     snapshot: dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "profile": args.profile,
         "region": args.region,
-        "identity": None,
+        "identity": identity,
         "ecs_service": None,
         "ecs_stopped_tasks": None,
         "ecs_task": None,
@@ -450,7 +434,6 @@ def main() -> int:
     }
 
     tier1: dict[str, Callable[[], Any]] = {
-        "identity": lambda: aws_json(["sts", "get-caller-identity"], args.profile, None),
         "alarms": lambda: aws_json(
             [
                 "cloudwatch",
@@ -634,12 +617,7 @@ def main() -> int:
         "raw": snapshot,
     }
 
-    payload = json.dumps(result, indent=2, sort_keys=True, default=str)
-    if args.output:
-        Path(args.output).write_text(payload + "\n", encoding="utf-8")
-    else:
-        print(payload)
-    return 0
+    return emit_result(result, args.output)
 
 
 if __name__ == "__main__":

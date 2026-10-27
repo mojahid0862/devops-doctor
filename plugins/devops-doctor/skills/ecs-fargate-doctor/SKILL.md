@@ -5,12 +5,15 @@ description: Diagnose ECS and Fargate service failures, stopped tasks, unhealthy
 
 # ECS Fargate Doctor
 
+Read [the shared evidence contract](../devops-doctor/references/evidence-contract.md). Resolve `<plugin-root>` from this skill's absolute path; preserve the user repository cwd.
+
+
 ## Rules
 
 - Read-only first. Do not update services, force deploys, scale, deregister targets, or roll back without explicit approval.
 - Avoid dumping task environment variables or secret values.
 - Prefer cluster/service/task evidence over guesses.
-- Do not claim ECS current state unless it comes from AWS CLI output, repo/IaC config, user-provided logs, or an explicit blocker.
+- Do not claim ECS current state unless it comes from AWS CLI output, repo/IaC config, user-provided logs. A blocker means evidence is unavailable, not a verified system state.
 - If evidence is missing, write `Unknown:` or `Blocked:` instead of guessing.
 
 ## Workflow
@@ -19,7 +22,7 @@ description: Diagnose ECS and Fargate service failures, stopped tasks, unhealthy
 2. Capture service evidence:
 
 ```bash
-python ../../scripts/aws_deploy_snapshot.py --region <region> --cluster <cluster> --service <service> --target-group-arn <tg-arn> --log-group <log-group> --since 2h --output ecs-snapshot.json
+python "<plugin-root>/scripts/aws_deploy_snapshot.py" --region <region> --cluster <cluster> --service <service> --target-group-arn <tg-arn> --log-group <log-group> --since 2h --output ecs-snapshot.json
 ```
 
 3. Prefer the helper output's `summary`, `findings`, `evidence.deployment_correlation`, and `blockers`, then check:

@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "run_id": "example-incident-001",
+  "scope": {
+    "kind": "synthetic-example",
+    "account_id": "000000000000",
+    "region": "ap-south-1",
+    "resources": [
+      "example-api"
+    ],
+    "window": {
+      "start": "2026-10-26T09:50:00Z",
+      "end": "2026-10-26T10:15:00Z"
+    }
+  },
+  "max_workers": 2,
+  "tasks": [
+    {
+      "id": "runtime",
+      "role": "runtime-investigator",
+      "read_keys": [
+        "synthetic:runtime:example-api:0950-1015"
+      ],
+      "write_paths": []
+    },
+    {
+      "id": "logs",
+      "role": "observability-investigator",
+      "read_keys": [
+        "synthetic:logs:example-api:0950-1015"
+      ],
+      "write_paths": []
+    },
+    {
+      "id": "review",
+      "role": "independent-verifier",
+      "depends_on": [
+        "runtime",
+        "logs"
+      ],
+      "review_of": [
+        "runtime",
+        "logs"
+      ],
+      "write_paths": []
+    }
+  ]
+}

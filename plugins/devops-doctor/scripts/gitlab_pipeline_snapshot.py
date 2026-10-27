@@ -1,136 +1,42 @@
 #!/usr/bin/env python3
-"""Collect a read-only GitLab pipeline/job snapshot through glab only."""
-
+"""Collect bounded read-only GitLab pipeline/job evidence through glab only."""
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import re
-import shutil
-import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
-
-ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-SECRET_PATTERNS = [
-    (re.compile(r"(?i)(authorization:\s*bearer\s+)[^\s]+"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(private-token:\s*)[^\s]+"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(token|password|passwd|secret|key)(\s*[:=]\s*)([^\s\"']+)"), r"\1\2[REDACTED]"),
-    (re.compile(r"AKIA[0-9A-Z]{16}"), "[REDACTED_AWS_ACCESS_KEY_ID]"),
-    (re.compile(r"(?i)aws_secret_access_key\s*=\s*[^\s]+"), "aws_secret_access_key=[REDACTED]"),
-]
-
-
-def find_glab() -> str | None:
-    found = shutil.which("glab")
-    if found:
-        return found
-    for candidate in (
-        r"D:\apps\Git\cmd\glab.cmd",
-        str(Path.home() / "AppData" / "Local" / "Programs" / "glab" / "glab.exe"),
-    ):
-        if Path(candidate).exists():
-            return candidate
-    return None
-
-
-def redact(text: str) -> str:
-    cleaned = ANSI_RE.sub("", text)
-    for pattern, replacement in SECRET_PATTERNS:
-        cleaned = pattern.sub(replacement, cleaned)
-    return cleaned
+from doctor_common import emit_result, redact
+from gitlab_mr_snapshot import (api_project, auth_failure, find_glab, page_limit,
+    positive_int, result_blockers, run_glab, run_glab_tasks)
 
 
 def tail_lines(text: str, max_lines: int) -> str:
-    lines = redact(text).splitlines()
-    if len(lines) <= max_lines:
-        return "\n".join(lines)
-    return "\n".join(lines[-max_lines:])
+    return "\n".join(redact(text).splitlines()[-max_lines:])
 
 
-def safe_command(command: list[str]) -> str:
-    return " ".join(command)
-
-
-def run_glab(glab: str, args: list[str], *, timeout: int = 60, parse_json: bool = True) -> dict[str, Any]:
-    command = [glab, *args]
-    try:
-        completed = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            env={**os.environ, "NO_COLOR": "1"},
-        )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "timeout", "command": safe_command(command)}
-
-    stdout = completed.stdout.strip()
-    stderr = completed.stderr.strip()
-    result: dict[str, Any] = {
-        "ok": completed.returncode == 0,
-        "command": safe_command(command),
-    }
-    if completed.returncode != 0:
-        result["error"] = redact(stderr or stdout)[-2000:]
-        return result
-
-    if parse_json:
-        try:
-            result["data"] = json.loads(stdout) if stdout else None
-        except json.JSONDecodeError:
-            result["data"] = redact(stdout)[-4000:]
-    else:
-        result["data"] = redact(stdout)
-    return result
-
-
-def api_project(repo: str, *parts: str) -> str:
-    return "/".join(["projects", quote(repo, safe=""), *[str(part).strip("/") for part in parts]])
-
-
-def run_glab_tasks(glab: str, tasks: dict[str, tuple[list[str], dict[str, Any]]], max_workers: int) -> dict[str, dict[str, Any]]:
-    workers = max(1, max_workers)
-    with ThreadPoolExecutor(max_workers=min(workers, len(tasks) or 1)) as executor:
-        futures = {
-            key: executor.submit(run_glab, glab, command_args, **kwargs)
-            for key, (command_args, kwargs) in tasks.items()
-        }
-        results: dict[str, dict[str, Any]] = {}
-        for key, future in futures.items():
-            try:
-                results[key] = future.result()
-            except Exception as exc:
-                results[key] = {"ok": False, "error": redact(str(exc)), "command": "internal"}
-        return results
-
-
-def classify_trace(trace: str) -> list[dict[str, Any]]:
-    lowered = trace.lower()
+def classify_trace(trace: str, *, failed: bool = False) -> list[dict[str, Any]]:
+    """Recognize actual error evidence only after job failure is established."""
+    if not failed:
+        return []
     rules = [
-        ("dependency_install", "Dependency install failed", ["npm err!", "pnpm err!", "yarn error", "pip install", "could not resolve dependency", "eresolve"]),
-        ("syntax_or_compile", "Syntax/compile error", ["syntaxerror", "parse error", "identifier", "has already been declared", "typescript", "babel"]),
-        ("test_failure", "Test failure", ["failed tests", "test failed", "jest", "pytest", "rspec", "assertionerror"]),
-        ("docker_build", "Docker build failed", ["docker build", "failed to solve", "no such file or directory", "pull access denied"]),
-        ("registry_auth", "Registry authentication failed", ["unauthorized", "authentication required", "denied: access forbidden", "invalid credentials"]),
-        ("deploy_failure", "Deploy command failed", ["deploy", "aws ecs update-service", "kubectl apply", "helm upgrade", "serverless deploy"]),
-        ("aws_permission", "AWS permission or identity issue", ["accessdenied", "not authorized", "is not authorized to perform", "expiredtoken"]),
-        ("runner_or_capacity", "Runner/capacity issue", ["runner system failure", "no space left on device", "killed", "out of memory", "oom"]),
+        ("dependency_install", "Dependency installation error", r"npm (?:err!|error)|(?:pnpm|yarn) (?:err!|error)|eresolve|could not resolve dependency|no matching distribution found|could not find a version that satisfies"),
+        ("syntax_or_compile", "Syntax or compilation error", r"syntaxerror|parse error|error ts\d+|has already been declared|compilation failed"),
+        ("test_failure", "Test assertion failure", r"assertionerror|\b[1-9]\d* failed(?:,|\s|$)|tests? failed|failed tests?"),
+        ("docker_build", "Container build error", r"failed to solve|pull access denied|error (?:building|building image)|docker build.*(?:failed|error)"),
+        ("registry_auth", "Registry authentication error", r"unauthorized: authentication required|denied: access forbidden|pull access denied|invalid credentials"),
+        ("deploy_failure", "Deployment error", r"(?:deploy(?:ment)?|helm|kubectl).*(?:failed|error)|(?:failed|error).*(?:deploy(?:ment)?|helm|kubectl)"),
+        ("aws_permission", "AWS permission or identity error", r"accessdenied|expiredtoken|not authorized to perform"),
+        ("runner_or_capacity", "Runner or capacity error", r"runner system failure|no space left on device|out of memory|oomkilled"),
     ]
-    findings: list[dict[str, Any]] = []
-    for code, title, needles in rules:
-        matches = [needle for needle in needles if needle in lowered]
-        if matches:
-            findings.append({"code": code, "title": title, "matched": matches[:5]})
+    findings = []
+    for code, title, pattern in rules:
+        evidence = [{"line": number, "text": redact(line)[:500]} for number, line in enumerate(trace.splitlines(), 1)
+                    if re.search(pattern, line, re.IGNORECASE)]
+        if evidence:
+            findings.append({"code": code, "title": title, "evidence": evidence[:5]})
     return findings
 
 
@@ -157,125 +63,88 @@ def summarize_jobs(jobs_result: dict[str, Any]) -> dict[str, Any]:
     return {"total": len(jobs), "failed": failed, "status_counts": counts}
 
 
-def build_root_cause_candidates(job_result: dict[str, Any], trace_tail: str, jobs_summary: dict[str, Any]) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    for item in classify_trace(trace_tail):
-        candidates.append({"confidence": "medium", "category": item["code"], "reason": item["title"], "evidence": item["matched"]})
-    job_data = job_result.get("data") if job_result.get("ok") else {}
-    if isinstance(job_data, dict) and job_data.get("failure_reason"):
-        candidates.insert(
-            0,
-            {
-                "confidence": "high",
-                "category": "gitlab_failure_reason",
-                "reason": str(job_data.get("failure_reason")),
-                "evidence": [f"job {job_data.get('id')} {job_data.get('name')}"],
-            },
-        )
+def build_root_cause_candidates(job_result: dict[str, Any], trace_tail: str,
+                                jobs_summary: dict[str, Any]) -> list[dict[str, Any]]:
+    job = job_result.get("data") if job_result.get("ok") else {}
+    job = job if isinstance(job, dict) else {}
+    failed = job.get("status") == "failed"
+    candidates = [{"confidence": "medium", "category": item["code"], "reason": item["title"],
+                   "evidence": item["evidence"]} for item in classify_trace(trace_tail, failed=failed)]
+    if failed and job.get("failure_reason"):
+        candidates.insert(0, {"confidence": "high", "category": "gitlab_failure_reason",
+                              "reason": str(job["failure_reason"]),
+                              "evidence": [f"job {job.get('id')} {job.get('name')}"]})
     if not candidates and jobs_summary.get("failed"):
-        candidates.append({"confidence": "low", "category": "failed_job", "reason": "pipeline has failed/canceled jobs; trace did not match known patterns", "evidence": jobs_summary["failed"][:3]})
+        candidates.append({"confidence": "low", "category": "job_status",
+                           "reason": "failed/canceled jobs require trace inspection; root cause unverified",
+                           "evidence": jobs_summary["failed"][:3]})
     return candidates
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Collect read-only GitLab pipeline evidence using glab only.")
-    parser.add_argument("--repo", required=True, help="GitLab project path, for example group/project.")
-    parser.add_argument("--pipeline-id", help="Pipeline ID to inspect.")
-    parser.add_argument("--job-id", help="Failed job ID to inspect.")
-    parser.add_argument("--mr-iid", help="Optional merge request IID for context.")
-    parser.add_argument("--trace-lines", type=int, default=300, help="Tail this many redacted job trace lines.")
-    parser.add_argument("--max-workers", type=int, default=8, help="Maximum concurrent glab read workers; lower if GitLab API throttles.")
-    parser.add_argument("--output", help="Write JSON snapshot to this path.")
-    return parser.parse_args()
+    parser = argparse.ArgumentParser(description="Collect bounded read-only GitLab pipeline evidence using glab only.")
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--pipeline-id")
+    parser.add_argument("--job-id")
+    parser.add_argument("--mr-iid")
+    parser.add_argument("--trace-lines", type=positive_int, default=300)
+    parser.add_argument("--max-workers", type=positive_int, default=8)
+    parser.add_argument("--max-pages", type=page_limit, default=5)
+    parser.add_argument("--output")
+    args = parser.parse_args()
+    if not (args.pipeline_id or args.job_id or args.mr_iid):
+        parser.error("provide --pipeline-id, --job-id, or --mr-iid")
+    return args
 
 
 def main() -> int:
     args = parse_args()
     glab = find_glab()
     if not glab:
-        print("glab not found in PATH or known local install paths.", file=sys.stderr)
+        print("glab not found; check PATH or DEVOPS_DOCTOR_GLAB.", file=sys.stderr)
         return 2
-
-    snapshot: dict[str, Any] = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "repo": args.repo,
-        "pipeline_id": args.pipeline_id,
-        "job_id": args.job_id,
-        "mr_iid": args.mr_iid,
-        "glab_path": glab,
-        "auth": run_glab(glab, ["auth", "status"], timeout=30, parse_json=False),
-        "pipeline": None,
-        "pipeline_jobs": None,
-        "job": None,
-        "job_trace_tail": None,
-        "merge_request": None,
-    }
-
+    auth = run_glab(glab, ["auth", "status"], timeout=30, parse_json=False)
+    if not auth.get("ok"):
+        return emit_result(auth_failure(auth, args.repo), args.output)
+    snapshot: dict[str, Any] = {"generated_at": datetime.now(timezone.utc).isoformat(), "repo": args.repo,
+                              "pipeline_id": args.pipeline_id, "job_id": args.job_id, "mr_iid": args.mr_iid, "auth": auth}
     tasks: dict[str, tuple[list[str], dict[str, Any]]] = {}
     if args.pipeline_id:
         tasks["pipeline"] = (["api", api_project(args.repo, "pipelines", args.pipeline_id)], {})
-        tasks["pipeline_jobs"] = (["api", api_project(args.repo, "pipelines", args.pipeline_id, "jobs")], {})
-
+        tasks["pipeline_jobs"] = (["api", api_project(args.repo, "pipelines", args.pipeline_id, "jobs")], {"max_pages": args.max_pages})
     if args.job_id:
         tasks["job"] = (["api", api_project(args.repo, "jobs", args.job_id)], {})
-        tasks["job_trace"] = (["api", api_project(args.repo, "jobs", args.job_id, "trace")], {"timeout": 90, "parse_json": False})
-
+        tasks["job_trace"] = (["api", api_project(args.repo, "jobs", args.job_id, "trace")], {"timeout": 90, "parse_json": False, "text_limit": 200000})
     if args.mr_iid:
         tasks["merge_request"] = (["api", api_project(args.repo, "merge_requests", args.mr_iid)], {})
-
-    task_results = run_glab_tasks(glab, tasks, args.max_workers)
-    for key in ("pipeline", "pipeline_jobs", "job", "merge_request"):
-        if key in task_results:
-            snapshot[key] = task_results[key]
-
-    trace = task_results.get("job_trace")
+    results = run_glab_tasks(glab, tasks, args.max_workers)
+    trace = results.pop("job_trace", None)
+    for key in ("pipeline", "job", "merge_request"):
+        if key in results and results[key].get("ok") and not isinstance(results[key].get("data"), dict):
+            results[key] = {**results[key], "ok": False, "error": f"invalid {key} response"}
+    snapshot.update(results)
     if trace:
-        snapshot["job_trace_tail"] = {
-            "ok": trace.get("ok"),
-            "command": trace.get("command"),
-            "error": trace.get("error"),
-            "data": tail_lines(str(trace.get("data", "")), args.trace_lines) if trace.get("ok") else None,
-        }
-
-    jobs_summary = summarize_jobs(snapshot["pipeline_jobs"] or {})
+        text = str(trace.get("data") or "")
+        lines = text.splitlines()
+        snapshot["job_trace_tail"] = {**trace, "data": tail_lines(text, args.trace_lines),
+                                      "truncated": bool(trace.get("truncated")) or len(lines) > args.trace_lines,
+                                      "line_numbers_relative_to": "retained trace tail"}
+    jobs_summary = summarize_jobs(snapshot.get("pipeline_jobs") or {})
     trace_text = str((snapshot.get("job_trace_tail") or {}).get("data") or "")
-    root_cause_candidates = build_root_cause_candidates(snapshot.get("job") or {}, trace_text, jobs_summary)
-    blockers = [
-        {"scope": key, "reason": value.get("error", "command failed")}
-        for key, value in snapshot.items()
-        if isinstance(value, dict) and value.get("ok") is False
-    ]
+    job = snapshot.get("job") or {}
+    candidates = build_root_cause_candidates(job, trace_text, jobs_summary)
+    failed = isinstance(job.get("data"), dict) and job["data"].get("status") == "failed"
     result = {
-        "summary": {
-            "repo": args.repo,
-            "pipeline_id": args.pipeline_id,
-            "job_id": args.job_id,
-            "mr_iid": args.mr_iid,
-            "failed_jobs": jobs_summary.get("failed", []),
-            "status_counts": jobs_summary.get("status_counts", {}),
-            "root_cause_candidates": root_cause_candidates,
-        },
-        "findings": [
-            {"severity": "high", "rule": "failed_job", **job}
-            for job in jobs_summary.get("failed", [])
-        ],
-        "evidence": {
-            "jobs_summary": jobs_summary,
-            "trace_classification": classify_trace(trace_text),
-        },
-        "blockers": blockers,
-        "next_commands": [
-            f"glab ci trace {args.job_id} --repo {args.repo}" if args.job_id else f"glab api {api_project(args.repo, 'pipelines', args.pipeline_id, 'jobs')}" if args.pipeline_id else "glab ci list",
-        ],
-        "raw": snapshot,
+        "summary": {"repo": args.repo, "pipeline_id": args.pipeline_id, "job_id": args.job_id,
+                    "mr_iid": args.mr_iid, "failed_jobs": jobs_summary["failed"],
+                    "status_counts": jobs_summary["status_counts"], "root_cause_candidates": candidates},
+        "findings": [{"severity": "high" if item["status"] == "failed" else "info", "rule": "job_status", **item}
+                     for item in jobs_summary["failed"]],
+        "evidence": {"jobs_summary": jobs_summary, "trace_classification": classify_trace(trace_text, failed=failed)},
+        "blockers": result_blockers(snapshot),
+        "next_commands": [f"glab ci trace {args.job_id} --repo {args.repo}"] if args.job_id else [], "raw": snapshot,
     }
-
-    payload = json.dumps(result, indent=2, sort_keys=True, default=str)
-    if args.output:
-        Path(args.output).write_text(payload + "\n", encoding="utf-8")
-    else:
-        print(payload)
-    return 0
+    return emit_result(result, args.output)
 
 
 if __name__ == "__main__":

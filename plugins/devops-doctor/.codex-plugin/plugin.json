@@ -1,10 +1,10 @@
 {
   "name": "devops-doctor",
-  "version": "0.1.1+codex.20260625",
-  "description": "Fast, read-only DevOps/SRE operator for GitLab CI/CD, AWS stack health, incidents, cost, security drift, observability, and safe rollbacks.",
+  "version": "0.3.5",
+  "description": "Read-only DevOps and SRE investigation workflows for GitLab CI/CD, AWS infrastructure, incidents, cost, security drift, observability, and rollback planning.",
   "author": {
-    "name": "mojahid0862",
-    "url": "https://github.com/mojahid0862"
+    "name": "Mojahid Ul Haque",
+    "url": "https://mojahidulhaque.com/"
   },
   "homepage": "https://github.com/mojahid0862/devops-doctor",
   "repository": "https://github.com/mojahid0862/devops-doctor",
@@ -19,21 +19,19 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "DevOps Doctor",
-    "shortDescription": "Fast read-only DevOps/SRE operator for GitLab, AWS stack health, incidents, cost, security, and rollbacks.",
-    "longDescription": "DevOps Doctor helps Codex act as a chat-first senior SRE/DevOps operator for production engineering work. It uses fast first-pass routing for normal GitLab MR reviews, deeper root-cause evidence for failed pipelines and incidents, and bounded AWS helpers for ECS/Fargate, RDS PostgreSQL, ElastiCache, S3, CloudFront, Route 53, Lambda, CloudWatch, ECR, and CloudTrail. It follows a strict evidence contract: no invented current state, clear blockers when tools or permissions are missing, read-only by default, unsafe write actions gated by explicit approval, and fixes paired with validation and rollback.",
-    "developerName": "mojahid0862",
+    "shortDescription": "Diagnose cloud, CI/CD, and production incidents safely.",
+    "longDescription": "Evidence-led DevOps workflows with scoped readiness checks, bounded parallel collection, current-commit GitLab review gates, shared secret sanitization, Terraform risk analysis, cost comparisons, saved-snapshot drift, and validation/rollback planning. Cloud diagnostics are read-only; production mutations require authorization. DevOps Team coordinates available native subagents with scoped roles, exclusive file/read ownership, dependency ordering, independent review, and offline handoff consistency checks.",
+    "developerName": "Mojahid Ul Haque",
     "category": "Developer Tools",
     "capabilities": [
       "Interactive",
-      "Read",
-      "Automation"
+      "Read"
     ],
     "defaultPrompt": [
-      "Handle this GitLab or AWS issue from chat with evidence only.",
-      "Fast review this GitLab MR, score it out of 100, and tell me if it is safe to merge.",
-      "Investigate this GitLab failed pipeline with glab and no guessing.",
-      "Check my AWS stack health across ECS, RDS, Redis, S3, CloudFront, Route 53, Lambda, and CloudWatch.",
-      "Investigate this AWS ECS/Fargate failure and give a safe rollback plan."
+      "Diagnose this GitLab or AWS issue using evidence only.",
+      "Review this GitLab merge request and identify deployment risks.",
+      "Investigate this AWS ECS or Fargate failure and provide a safe rollback plan.",
+      "Use $devops-team to investigate this incident with scoped specialists and verify their findings."
     ],
     "websiteURL": "https://github.com/mojahid0862/devops-doctor",
     "brandColor": "#2563EB",

@@ -1,81 +1,19 @@
 ---
 name: devops-operator
-description: Operate DevOps Doctor as a chat-first control plane for GitLab CI/CD and AWS work, including ECS/Fargate, RDS, ElastiCache/Redis, S3, CloudFront, and Route 53, where Codex handles evidence collection, triage, commands, validation, and rollback planning from the chat. Use when the user wants to avoid opening GitLab or AWS manually, wants the plugin to handle incidents end to end, or asks for strict non-hallucinating DevOps automation.
+description: Coordinate a multi-step GitLab and AWS investigation from chat, selecting scoped evidence collectors and tracking unresolved questions. Use when the user asks for end-to-end triage or delegated operations across multiple services.
 ---
 
 # DevOps Operator
 
-## Contract
+Read [the evidence contract](../devops-doctor/references/evidence-contract.md). Resolve `<plugin-root>` from this file's absolute path.
 
-- Act from chat. Do the GitLab/AWS/repo evidence collection yourself when credentials and tools are available.
-- Never invent GitLab status, AWS state, resource names, regions, account IDs, logs, metrics, costs, or root cause.
-- Every factual claim about current systems must be backed by one of:
-  - command output collected in this turn
-  - repo/config file content read in this turn
-  - user-provided log/screenshot/text
-  - an explicit blocker
-- If evidence is missing, say `Blocked:` or `Unknown:`. Do not fill gaps with guesses.
-- Use confidence labels only with evidence: `High`, `Medium`, or `Low`.
-- Do not ask the user to open GitLab or AWS unless auth, MFA, policy, or missing permission blocks local collection.
-- Do not expose secrets, tokens, private keys, CI variables, env values, or sensitive customer data.
-- Do not perform write actions without explicit approval for the exact command/action.
+For an explicit agent/subagent request or useful independent workstreams, use `$devops-team` for scoped dispatch and handoff review. Estimate the initial useful team, then reassess during the task and add workers when new or splittable independent work justifies them, within the shared 20-worker and runtime limits. Keep dependent steps ordered.
 
-## Start Every New Investigation
+1. Identify the failure domain and known scope. Use the routing table in `$devops-doctor` only if the correct specialist is unclear.
+2. Reuse verified readiness for the current investigation. If needed, run `python "<plugin-root>/scripts/devops_doctor_preflight.py" --scope gitlab` or `--scope aws --profile <profile> --region <region>`. Default `--scope local` performs no cloud/GitLab auth calls. Do not invoke unrelated tools or duplicate a helper's built-in auth check.
+3. Use one narrow collector first: MR fast review, failed pipeline, ECS deployment, or an explicit AWS service list. Parallel reads must remain bounded; stop the blocked branch on missing auth/permissions.
+4. Inspect `status`, `collection.complete`, `blockers`, findings, and scope before drawing a conclusion. Use exact time windows and identifiers for follow-up reads.
+5. Build a timeline for incidents, separating deployment, target-health, task-stop, application-error, and alarm timestamps. State any unproven connection.
+6. Complete authorized local fixes and their validation. For an additional production mutation, prepare the exact command/diff, blast radius, rollback, and health checks before requesting the remaining authorization.
 
-Run the local readiness check first unless it was already run in the same turn:
-
-```bash
-python ../../scripts/devops_doctor_preflight.py --output devops-doctor-preflight.json
-```
-
-Use the result to decide:
-
-- GitLab ready: use `glab` only for GitLab remote actions.
-- AWS ready: use AWS CLI read-only commands and snapshot helpers.
-- Repo ready: inspect local CI, Docker, Terraform, Kubernetes, and app config.
-- Blocked: report the exact failing tool/auth/permission and stop that branch.
-- For normal MR URLs, use `gitlab_mr_fast_review.py` before any heavy GitLab evidence.
-- For failed pipelines/jobs or "why failed" requests, use `gitlab_pipeline_snapshot.py` and its root-cause candidates.
-- For broad AWS stack checks, use `aws_stack_snapshot.py` with the smallest service allowlist matching the request.
-- For ECS/Fargate incidents with cluster/service details, use `aws_deploy_snapshot.py` first.
-- For CDN/DNS or Redis incidents, include only the needed `cloudfront`, `route53`, and `elasticache` services in the AWS snapshot.
-
-## Routing
-
-- Use `$gitlab-pipeline-doctor` for failed pipelines/jobs.
-- Use `$gitlab-mr-review` for MR review.
-- Use `$aws-deployment-doctor` for AWS incidents.
-- Use `$ecs-fargate-doctor` for ECS/Fargate failures.
-- Use `$terraform-plan-review` for Terraform/IaC changes.
-- Use `$cost-optimizer` for AWS spend and waste.
-- Use `$security-drift-check` for security posture.
-- Use `$rollback-planner` for production rollback.
-- Use `$observability-doctor` for logs, metrics, alerts, and SLOs.
-
-## Evidence Discipline
-
-Before final answer, check:
-
-- Did I verify tool/auth readiness?
-- Did I collect current evidence for every claim?
-- Did I separate facts from inference?
-- Did I state exact blockers instead of guessing?
-- Did I include validation and rollback for fixes?
-- Did I avoid secret exposure?
-
-## Output
-
-Use the smallest format that fits:
-
-```text
-Status:
-Evidence:
-Root cause:
-Fix:
-Validate:
-Rollback:
-Blocked:
-Next:
-```
-
-Omit empty sections. End with `Changed | Validate | Next`.
+Return the answer first, then decisive evidence, unresolved blockers, and the smallest next action. Include `Agents used: 1 main + N subagents = T total`, counting distinct confirmed participants in this task, including descendants and counting reused workers once; use zero subagents for direct work and state uncertainty if participation cannot be verified. Do not fill an empty report template. End with `Changed | Validate | Next` when appropriate.

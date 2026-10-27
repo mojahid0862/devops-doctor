@@ -1,0 +1,31 @@
+{
+  "run_id": "example-incident-001",
+  "task_id": "logs",
+  "status": "complete",
+  "scope": {
+    "kind": "synthetic-example",
+    "account_id": "000000000000",
+    "region": "ap-south-1",
+    "resources": [
+      "example-api"
+    ],
+    "window": {
+      "start": "2026-10-26T09:50:00Z",
+      "end": "2026-10-26T10:15:00Z"
+    }
+  },
+  "summary": "Synthetic request errors begin at 10:00Z.",
+  "evidence": [
+    {
+      "id": "e1",
+      "source": "synthetic-fixture:logs",
+      "observed_at": "2026-10-26T10:15:00Z",
+      "claim": "Synthetic request errors begin at 10:00Z."
+    }
+  ],
+  "findings": [],
+  "changed_files": [],
+  "tests": [],
+  "blockers": [],
+  "reviewed_tasks": []
+}

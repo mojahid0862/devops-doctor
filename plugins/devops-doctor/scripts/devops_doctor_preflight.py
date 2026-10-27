@@ -1,137 +1,86 @@
 #!/usr/bin/env python3
-"""Read-only local readiness check for DevOps Doctor."""
-
+"""Check only requested DevOps Doctor tools; local checks never authenticate."""
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import shutil
-import subprocess
-import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
-KNOWN_GLAB_PATHS = [
-    r"D:\apps\Git\cmd\glab.cmd",
-    str(Path.home() / "AppData" / "Local" / "Programs" / "glab" / "glab.exe"),
-]
-
-
-def which_with_known(name: str, known_paths: list[str] | None = None) -> str | None:
-    found = shutil.which(name)
-    if found:
-        return found
-    for candidate in known_paths or []:
-        if Path(candidate).exists():
-            return candidate
-    return None
+from doctor_common import collect_status, emit_result, run_command
 
 
 def run(command: list[str], timeout: int = 20) -> dict[str, Any]:
-    try:
-        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "timeout", "command": " ".join(command)}
-    except OSError as exc:
-        return {"ok": False, "error": str(exc), "command": " ".join(command)}
-
-    return {
-        "ok": completed.returncode == 0,
-        "returncode": completed.returncode,
-        "command": " ".join(command),
-        "stdout_tail": completed.stdout.strip()[-1200:],
-        "stderr_tail": completed.stderr.strip()[-1200:],
-    }
+    return run_command(command, timeout=timeout, parse_json=False, text_limit=1200)
 
 
 def run_json(command: list[str], timeout: int = 20) -> dict[str, Any]:
-    result = run(command, timeout)
-    if not result.get("ok"):
-        return result
-    try:
-        result["json"] = json.loads(result.get("stdout_tail") or "{}")
-    except json.JSONDecodeError:
-        result["json"] = None
-    result.pop("stdout_tail", None)
-    return result
+    # Parse the complete response before any display limit is applied.
+    return run_command(command, timeout=timeout, parse_json=True)
 
 
 def safe_aws_identity(identity: dict[str, Any]) -> dict[str, Any]:
     if not identity.get("ok"):
         return identity
-    data = identity.get("json") or {}
-    account = data.get("Account")
-    arn = data.get("Arn", "")
+    data = identity.get("data")
+    if not isinstance(data, dict) or not data.get("Account") or not data.get("Arn"):
+        return {**identity, "ok": False, "data": None, "error": "STS response lacks Account or Arn"}
+    account = data["Account"]
+    parts = str(data["Arn"]).split(":", 5)
     arn_shape = None
-    if isinstance(arn, str) and ":" in arn:
-        parts = arn.split(":", 5)
-        if len(parts) == 6:
-            resource_type = parts[5].split("/", 1)[0].split(":", 1)[0]
-            arn_shape = ":".join([parts[0], parts[1], parts[2], parts[3], account or parts[4], f"{resource_type}/[redacted]"])
-    return {
-        "ok": True,
-        "returncode": identity.get("returncode"),
-        "command": identity.get("command"),
-        "account": account,
-        "arn_shape": arn_shape,
-        "stderr_tail": identity.get("stderr_tail", ""),
+    if len(parts) == 6:
+        resource_type = parts[5].split("/", 1)[0].split(":", 1)[0]
+        arn_shape = ":".join([*parts[:5], f"{resource_type}/[redacted]"])
+    return {key: value for key, value in identity.items() if key != "data"} | {
+        "account": account, "arn_shape": arn_shape,
     }
-
-
-def command_status(name: str, known_paths: list[str] | None = None) -> dict[str, Any]:
-    path = which_with_known(name, known_paths)
-    return {"available": bool(path), "path": path}
 
 
 def git_context() -> dict[str, Any]:
     git = shutil.which("git")
     if not git:
-        return {"available": False}
+        return {"available": False, "inside_work_tree": False}
     inside = run([git, "rev-parse", "--is-inside-work-tree"], timeout=10)
-    if not inside["ok"]:
+    if not inside.get("ok"):
         return {"available": True, "inside_work_tree": False}
-    return {
-        "available": True,
-        "inside_work_tree": True,
-        "root": run([git, "rev-parse", "--show-toplevel"], timeout=10),
-        "branch": run([git, "branch", "--show-current"], timeout=10),
-        "status": run([git, "status", "--short"], timeout=10),
-        "remote": run([git, "remote", "-v"], timeout=10),
+    commands = {
+        "root": [git, "rev-parse", "--show-toplevel"],
+        "branch": [git, "branch", "--show-current"],
+        "status": [git, "status", "--short"],
+        "remote": [git, "remote", "-v"],
     }
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = dict(zip(commands, pool.map(lambda cmd: run(cmd, 10), commands.values())))
+    return {"available": True, "inside_work_tree": True, **results}
 
 
 def glab_context() -> dict[str, Any]:
-    glab = which_with_known("glab", KNOWN_GLAB_PATHS)
+    glab = shutil.which("glab")
     if not glab:
-        return {"available": False, "path": None, "ready": False, "blocker": "glab not found"}
+        return {"available": False, "path": None, "ready": False, "blocker": "glab not found in PATH"}
     auth = run([glab, "auth", "status"], timeout=25)
     return {
-        "available": True,
-        "path": glab,
-        "auth": auth,
-        "ready": auth["ok"],
-        "blocker": None if auth["ok"] else "glab auth status failed",
+        "available": True, "path": glab, "auth": auth, "ready": bool(auth.get("ok")),
+        "blocker": None if auth.get("ok") else auth.get("error", "glab auth status failed"),
     }
 
 
-def aws_context() -> dict[str, Any]:
+def aws_context(profile: str | None = None, region: str | None = None) -> dict[str, Any]:
     aws = shutil.which("aws")
     if not aws:
-        return {"available": False, "path": None, "ready": False, "blocker": "aws CLI not found"}
-    identity = safe_aws_identity(run_json([aws, "sts", "get-caller-identity", "--output", "json"], timeout=25))
-    profiles = run([aws, "configure", "list-profiles"], timeout=15)
+        return {"available": False, "path": None, "ready": False, "blocker": "aws CLI not found in PATH"}
+    command = [aws, "sts", "get-caller-identity", "--output", "json"]
+    if profile:
+        command += ["--profile", profile]
+    if region:
+        command += ["--region", region]
+    identity = safe_aws_identity(run_json(command, timeout=25))
     return {
-        "available": True,
-        "path": aws,
-        "identity": identity,
-        "profiles": profiles,
-        "region_env": os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"),
-        "profile_env": os.environ.get("AWS_PROFILE"),
-        "ready": identity["ok"],
-        "blocker": None if identity["ok"] else "aws sts get-caller-identity failed",
+        "available": True, "path": aws, "identity": identity,
+        "profile": profile, "region": region, "ready": bool(identity.get("ok")),
+        "blocker": None if identity.get("ok") else identity.get("error", "aws sts get-caller-identity failed"),
     }
 
 
@@ -139,67 +88,60 @@ def optional_tool_context(name: str, command: list[str]) -> dict[str, Any]:
     path = shutil.which(name)
     if not path:
         return {"available": False, "path": None}
-    return {"available": True, "path": path, "version": run(command, timeout=15)}
+    return {"available": True, "path": path, "version": run([path, *command[1:]], timeout=15)}
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Check local DevOps Doctor tool readiness without exposing secrets.")
-    parser.add_argument("--output", help="Write JSON result to this path.")
-    return parser.parse_args()
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--scope", choices=("gitlab", "aws", "local", "all"), default="local",
+                        help="Probe only this scope. Default local performs no cloud/GitLab authentication.")
+    parser.add_argument("--profile", help="AWS profile used only by aws/all scope.")
+    parser.add_argument("--region", help="AWS region used only by aws/all scope.")
+    parser.add_argument("--output", help="Write sanitized JSON to this path.")
+    return parser.parse_args(argv)
+
+
+def build_report(args: argparse.Namespace) -> dict[str, Any]:
+    probes = {}
+    if args.scope in ("local", "all"):
+        probes = {
+            "git": git_context,
+            "terraform": lambda: optional_tool_context("terraform", ["terraform", "version", "-json"]),
+            "kubectl": lambda: optional_tool_context("kubectl", ["kubectl", "version", "--client=true", "-o", "json"]),
+            "docker": lambda: optional_tool_context("docker", ["docker", "--version"]),
+            "helm": lambda: optional_tool_context("helm", ["helm", "version", "--short"]),
+        }
+    if args.scope in ("gitlab", "all"):
+        probes["glab"] = glab_context
+    if args.scope in ("aws", "all"):
+        probes["aws"] = lambda: aws_context(args.profile, args.region)
+    with ThreadPoolExecutor(max_workers=min(4, len(probes))) as pool:
+        futures = {key: pool.submit(probe) for key, probe in probes.items()}
+        raw = {key: future.result() for key, future in futures.items()}
+    blockers = [
+        {"scope": "gitlab" if key == "glab" else key, "reason": value["blocker"]}
+        for key, value in raw.items() if value.get("blocker")
+    ]
+    summary: dict[str, Any] = {"cwd": str(Path.cwd()), "scope": args.scope,
+                               "generated_at": datetime.now(timezone.utc).isoformat()}
+    for key, value in raw.items():
+        if key in ("glab", "aws"):
+            summary[f"{key}_ready"] = value["ready"]
+        elif key == "git":
+            summary["git_ready"] = value.get("inside_work_tree", False)
+        else:
+            summary[f"{key}_available"] = value.get("available", False)
+    result = {"summary": summary, "findings": [], "evidence": {"probes_requested": list(probes)},
+              "blockers": blockers, "next_commands": [], "raw": raw}
+    result["status"] = collect_status(result)
+    if blockers:
+        result["status"] = "failed" if len(blockers) == len(probes) else "partial"
+    return result
 
 
 def main() -> int:
     args = parse_args()
-    raw: dict[str, Any] = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "cwd": str(Path.cwd()),
-        "git": git_context(),
-        "glab": glab_context(),
-        "aws": aws_context(),
-        "terraform": optional_tool_context("terraform", ["terraform", "version", "-json"]),
-        "kubectl": optional_tool_context("kubectl", ["kubectl", "version", "--client=true", "-o", "json"]),
-        "docker": optional_tool_context("docker", ["docker", "version", "--format", "{{json .Client}}"]),
-        "helm": optional_tool_context("helm", ["helm", "version", "--short"]),
-    }
-    blockers = []
-    if not raw["glab"].get("ready"):
-        blockers.append({"scope": "gitlab", "reason": raw["glab"].get("blocker")})
-    if raw["aws"].get("available") and not raw["aws"].get("ready"):
-        blockers.append({"scope": "aws", "reason": raw["aws"].get("blocker")})
-    raw["blockers"] = blockers
-    result: dict[str, Any] = {
-        "summary": {
-            "cwd": raw["cwd"],
-            "git_ready": bool(raw["git"].get("inside_work_tree")),
-            "glab_ready": bool(raw["glab"].get("ready")),
-            "aws_ready": bool(raw["aws"].get("ready")),
-            "terraform_available": bool(raw["terraform"].get("available")),
-            "kubectl_available": bool(raw["kubectl"].get("available")),
-            "docker_available": bool(raw["docker"].get("available")),
-            "helm_available": bool(raw["helm"].get("available")),
-        },
-        "findings": [],
-        "evidence": {
-            "git": raw["git"],
-            "glab_path": raw["glab"].get("path"),
-            "aws_path": raw["aws"].get("path"),
-            "aws_profile_env": raw["aws"].get("profile_env"),
-            "aws_region_env": raw["aws"].get("region_env"),
-        },
-        "blockers": blockers,
-        "next_commands": [
-            "glab auth status",
-            "aws sts get-caller-identity",
-        ],
-        "raw": raw,
-    }
-
-    payload = json.dumps(result, indent=2, sort_keys=True, default=str)
-    if args.output:
-        Path(args.output).write_text(payload + "\n", encoding="utf-8")
-    else:
-        print(payload)
-    return 0
+    return emit_result(build_report(args), args.output)
 
 
 if __name__ == "__main__":

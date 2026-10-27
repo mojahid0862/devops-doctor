@@ -1,0 +1,34 @@
+{
+  "run_id": "example-incident-001",
+  "task_id": "review",
+  "status": "complete",
+  "scope": {
+    "kind": "synthetic-example",
+    "account_id": "000000000000",
+    "region": "ap-south-1",
+    "resources": [
+      "example-api"
+    ],
+    "window": {
+      "start": "2026-10-26T09:50:00Z",
+      "end": "2026-10-26T10:15:00Z"
+    }
+  },
+  "summary": "Synthetic deployment follows the first request error; causality is not established.",
+  "evidence": [
+    {
+      "id": "e1",
+      "source": "synthetic-fixture:review",
+      "observed_at": "2026-10-26T10:15:00Z",
+      "claim": "Synthetic deployment follows the first request error; causality is not established."
+    }
+  ],
+  "findings": [],
+  "changed_files": [],
+  "tests": [],
+  "blockers": [],
+  "reviewed_tasks": [
+    "runtime",
+    "logs"
+  ]
+}

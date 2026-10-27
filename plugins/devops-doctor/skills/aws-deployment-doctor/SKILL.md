@@ -5,6 +5,9 @@ description: Diagnose AWS deployment failures and production incidents with read
 
 # AWS Deployment Doctor
 
+Read [the shared evidence contract](../devops-doctor/references/evidence-contract.md). Resolve `<plugin-root>` from this skill's absolute path; preserve the user repository cwd.
+
+
 ## Rules
 
 - Use read-only AWS CLI commands first.
@@ -12,7 +15,7 @@ description: Diagnose AWS deployment failures and production incidents with read
 - Confirm account/region/profile before interpreting evidence.
 - Do not print secrets, full env vars, access keys, private data, or sensitive tags.
 - Flag unsafe or breaking actions before giving commands.
-- Do not claim AWS current state unless it comes from AWS CLI output, repo/IaC config, user-provided logs, or an explicit blocker.
+- Do not claim AWS current state unless it comes from AWS CLI output, repo/IaC config, user-provided logs. A blocker means evidence is unavailable, not a verified system state.
 - If evidence is missing, write `Unknown:` or `Blocked:` instead of guessing.
 
 ## Workflow
@@ -28,9 +31,9 @@ aws configure list
 3. Use bounded snapshots:
 
 ```bash
-python ../../scripts/aws_deploy_snapshot.py --region <region> --cluster <cluster> --service <service> --target-group-arn <tg-arn> --log-group <log-group> --since 2h --output aws-deploy-snapshot.json
-python ../../scripts/aws_infra_snapshot.py --region <region> --services ec2,ecs,rds,lambda,elbv2,cloudwatch,s3,cloudfront,route53,elasticache --output aws-infra-snapshot.json
-python ../../scripts/aws_stack_snapshot.py --region <region> --services ecs,rds,elasticache,s3,cloudfront,route53,lambda,cloudwatch,ecr,cloudtrail --output aws-stack-snapshot.json
+python "<plugin-root>/scripts/aws_deploy_snapshot.py" --region <region> --cluster <cluster> --service <service> --target-group-arn <tg-arn> --log-group <log-group> --since 2h --output aws-deploy-snapshot.json
+python "<plugin-root>/scripts/aws_infra_snapshot.py" --region <region> --services ec2,ecs,rds,lambda,elbv2,cloudwatch,s3,cloudfront,route53,elasticache --output aws-infra-snapshot.json
+python "<plugin-root>/scripts/aws_stack_snapshot.py" --region <region> --services ecs,rds,elasticache,s3,cloudfront,route53,lambda,cloudwatch,ecr,cloudtrail --output aws-stack-snapshot.json
 ```
 
 Add `--db-instance <db>`, `--cache-cluster <cluster>`, `--replication-group <group>`, `--distribution-id <id>`, `--hosted-zone-id <zone>`, or `--health-check-id <id>` to `aws_deploy_snapshot.py` when the incident may cross database, cache, CDN, or DNS layers.

@@ -5,12 +5,15 @@ description: Create safe rollback and recovery plans for GitLab deployments, AWS
 
 # Rollback Planner
 
+Read [the shared evidence contract](../devops-doctor/references/evidence-contract.md). Resolve `<plugin-root>` from this skill's absolute path; preserve the user repository cwd.
+
+
 ## Rules
 
 - Do not execute rollback, deploy, database restore, DNS change, Terraform apply, or scaling command without explicit approval.
 - State blast radius, data risk, downtime expectation, health checks, and abort condition.
 - Prefer reversible steps and preserve forensic evidence.
-- Do not claim rollback target, current version, or health state unless it comes from GitLab/AWS/Kubernetes/Terraform output, repo config, user-provided evidence, or an explicit blocker.
+- Do not claim rollback target, current version, or health state unless it comes from GitLab/AWS/Kubernetes/Terraform output, repo config, user-provided evidence. A blocker means evidence is unavailable, not a verified system state.
 - If evidence is missing, write `Unknown:` or `Blocked:` instead of guessing.
 
 ## Workflow

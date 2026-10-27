@@ -11,6 +11,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from doctor_common import run_command, run_ecs_read, emit_result, redact, configure_concurrency
 from typing import Any, Callable
 
 
@@ -48,35 +49,7 @@ S3_MISSING_CONFIG_ERRORS = (
 
 
 def run_aws(args: list[str], timeout: int = 45) -> dict[str, Any]:
-    command = ["aws", *args, "--output", "json"]
-    try:
-        completed = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "timeout", "command": safe_command(command)}
-
-    if completed.returncode != 0:
-        return {
-            "ok": False,
-            "error": completed.stderr.strip()[-1200:],
-            "command": safe_command(command),
-        }
-
-    stdout = completed.stdout.strip()
-    if not stdout:
-        return {"ok": True, "data": None, "command": safe_command(command)}
-
-    try:
-        return {"ok": True, "data": json.loads(stdout), "command": safe_command(command)}
-    except json.JSONDecodeError:
-        return {"ok": True, "data": stdout[-2000:], "command": safe_command(command)}
+    return run_ecs_read(["aws", *args, "--output", "json"], timeout=timeout)
 
 
 def safe_command(command: list[str]) -> str:
@@ -803,6 +776,9 @@ def main() -> int:
         print(f"Unsupported services: {', '.join(unknown)}", file=sys.stderr)
         return 2
 
+    if not 1 <= args.max_workers <= 32:
+        return emit_result({"status": "failed", "blockers": [{"scope": "arguments", "reason": "max-workers must be 1..32"}]}, args.output)
+    configure_concurrency(args.max_workers)
     snapshot: dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "profile": args.profile,
@@ -810,6 +786,9 @@ def main() -> int:
         "identity": collect_identity(args.profile),
         "services": {},
     }
+
+    if not snapshot["identity"].get("ok"):
+        return emit_result({"status": "failed", "evidence": {"identity": snapshot["identity"]}, "blockers": [{"scope": "auth", "reason": snapshot["identity"].get("error")}]}, args.output)
 
     collector_jobs = [
         (
@@ -827,6 +806,7 @@ def main() -> int:
 
     summary, findings, blockers = summarize(snapshot)
     result = {
+        "scope": {"collector": "aws_infra_snapshot", "account_id": snapshot["identity"].get("data", {}).get("Account"), "region": args.region, "filters": {"services": sorted(set(selected)), "metrics": not args.no_metrics}},
         "summary": summary,
         "findings": findings,
         "evidence": {"identity": snapshot.get("identity")},
@@ -837,12 +817,7 @@ def main() -> int:
         "raw": snapshot,
     }
 
-    payload = json.dumps(result, indent=2, sort_keys=True, default=str)
-    if args.output:
-        Path(args.output).write_text(payload + "\n", encoding="utf-8")
-    else:
-        print(payload)
-    return 0
+    return emit_result(result, args.output)
 
 
 if __name__ == "__main__":

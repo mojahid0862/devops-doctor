@@ -5,20 +5,23 @@ description: Investigate GitLab CI/CD pipeline failures, failed jobs, runner err
 
 # GitLab Pipeline Doctor
 
+Read [the shared evidence contract](../devops-doctor/references/evidence-contract.md). Resolve `<plugin-root>` from this skill's absolute path; preserve the user repository cwd.
+
+
 ## Rules
 
 - Use `glab` only for GitLab remote actions: metadata, pipeline/job reads, traces, diffs, comments, and status checks.
 - Do not use browser, curl, web search, or GitLab connectors for GitLab actions unless the user explicitly allows fallback.
 - If `glab` is missing or auth fails, stop and report the exact blocker.
-- Stay read-only unless the user explicitly approves retrying, canceling, triggering, approving, merging, or editing CI variables.
+- Remote operations stay read-only unless the user authorizes the action. Previously authorized local fixes and tests may proceed without repeated approval.
 - Never print secrets, masked variables, tokens, deploy keys, registry credentials, or webhook secrets.
-- Do not claim current pipeline/job state unless it comes from `glab` output, repo files, user-provided logs, or an explicit blocker.
+- Current pipeline/job claims require `glab` output or timestamped user logs; repository files describe intended configuration. A blocker means evidence is unavailable, not a verified system state.
 - If evidence is missing, write `Unknown:` or `Blocked:` instead of guessing.
 
 ## Workflow
 
 1. Parse the pipeline/job URL or user text for project path, pipeline ID, job ID, branch, commit SHA, and MR IID.
-2. Verify `glab` and auth:
+2. Choose the helper below OR direct `glab` reads. The helper already checks authentication; for direct reads only, verify readiness when not already known:
 
 ```bash
 glab auth status
@@ -27,7 +30,7 @@ glab auth status
 3. Capture bounded evidence with the helper when project path is known:
 
 ```bash
-python ../../scripts/gitlab_pipeline_snapshot.py --repo <group/project> --pipeline-id <pipeline-id> --job-id <job-id> --output gitlab-pipeline-snapshot.json
+python "<plugin-root>/scripts/gitlab_pipeline_snapshot.py" --repo <group/project> --pipeline-id <pipeline-id> --job-id <job-id> --output gitlab-pipeline-snapshot.json
 ```
 
 This is the heavy GitLab evidence path. Use it for failed pipelines/jobs, root-cause analysis, trace-log review, ambiguous CI status, or when the user explicitly asks for deep GitLab investigation. It is not the default path for normal MR score/review. Prefer the helper output's `summary.failed_jobs`, `summary.root_cause_candidates`, `evidence.trace_classification`, and `blockers` before reading raw trace text.

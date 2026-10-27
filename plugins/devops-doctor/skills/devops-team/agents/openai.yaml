@@ -1,0 +1,7 @@
+interface:
+  display_name: "DevOps Team"
+  short_description: "Coordinate scoped DevOps specialist subagents."
+  default_prompt: "Use $devops-team to split this investigation across relevant specialists and verify the combined findings."
+
+policy:
+  allow_implicit_invocation: true

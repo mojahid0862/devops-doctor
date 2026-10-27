@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from doctor_common import run_command, emit_result, redact, configure_concurrency
 from typing import Any
 
 
@@ -85,6 +87,36 @@ def should_scan(path: Path) -> bool:
     if path.name.startswith("Dockerfile"):
         return True
     return False
+
+
+def discover_files(root: Path, max_files: int, max_file_bytes: int) -> tuple[list[Path], dict[str, Any]]:
+    """Prune excluded directories before traversal; never follow links outside root."""
+    files: list[Path] = []
+    coverage: dict[str, Any] = {"truncated": False, "skipped_large": 0, "skipped_links": 0, "errors": []}
+    def on_error(exc: OSError) -> None:
+        coverage["errors"].append(str(exc))
+    for folder, directories, names in os.walk(root, topdown=True, followlinks=False, onerror=on_error):
+        directories[:] = sorted(name for name in directories if name not in SKIP_DIRS and not (Path(folder) / name).is_symlink() and not getattr(Path(folder) / name, "is_junction", lambda: False)())
+        for name in sorted(names):
+            path = Path(folder) / name
+            if not should_scan(path.relative_to(root)):
+                continue
+            if path.is_symlink():
+                coverage["skipped_links"] += 1
+                continue
+            try:
+                if path.stat().st_size > max_file_bytes:
+                    coverage["skipped_large"] += 1
+                    continue
+            except OSError as exc:
+                on_error(exc)
+                continue
+            if len(files) >= max_files:
+                coverage["truncated"] = True
+                return files, coverage
+            files.append(path)
+    coverage["truncated"] = bool(coverage["skipped_large"] or coverage["skipped_links"] or coverage["errors"])
+    return files, coverage
 
 
 def severity(rule: str) -> str:
@@ -185,13 +217,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--root", default=".", help="Repository root to scan.")
     parser.add_argument("--output", help="Write JSON result to this path.")
     parser.add_argument("--max-workers", type=int, default=8, help="Throttle parallel file reads; lower this on slow disks or constrained runners.")
+    parser.add_argument("--max-files", type=int, default=10000, help="Maximum selected files; truncation is reported.")
+    parser.add_argument("--max-file-bytes", type=int, default=2097152, help="Skip larger files and report incomplete coverage.")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     root = Path(args.root).resolve()
-    files = [path for path in root.rglob("*") if path.is_file() and should_scan(path.relative_to(root))]
+    if not root.is_dir() or args.max_files < 1 or args.max_file_bytes < 1 or not 1 <= args.max_workers <= 32:
+        return emit_result({"status": "failed", "blockers": [{"scope": "arguments", "reason": "root must be a directory, limits positive, max-workers 1..32"}]}, args.output)
+    files, coverage = discover_files(root, args.max_files, args.max_file_bytes)
     findings: list[dict[str, Any]] = []
     max_workers = max(1, args.max_workers)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -211,7 +247,8 @@ def main() -> int:
         },
         "findings": findings,
         "evidence": signals,
-        "blockers": [],
+        "coverage": coverage,
+        "blockers": [{"scope": "files", "reason": str(item)} for item in coverage["errors"]] + [{"scope": item["path"], "reason": "file unreadable"} for item in findings if item["rule"] == "read_error"],
         "next_commands": [
             "git status --short",
             "npm run build",
@@ -223,12 +260,7 @@ def main() -> int:
             "files_scanned": len(files),
         },
     }
-    payload = json.dumps(result, indent=2, sort_keys=True)
-    if args.output:
-        Path(args.output).write_text(payload + "\n", encoding="utf-8")
-    else:
-        print(payload)
-    return 0
+    return emit_result(result, args.output)
 
 
 if __name__ == "__main__":

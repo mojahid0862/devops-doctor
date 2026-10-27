@@ -1,0 +1,31 @@
+{
+  "run_id": "example-incident-001",
+  "task_id": "runtime",
+  "status": "complete",
+  "scope": {
+    "kind": "synthetic-example",
+    "account_id": "000000000000",
+    "region": "ap-south-1",
+    "resources": [
+      "example-api"
+    ],
+    "window": {
+      "start": "2026-10-26T09:50:00Z",
+      "end": "2026-10-26T10:15:00Z"
+    }
+  },
+  "summary": "Synthetic deployment event is at 10:08Z.",
+  "evidence": [
+    {
+      "id": "e1",
+      "source": "synthetic-fixture:runtime",
+      "observed_at": "2026-10-26T10:15:00Z",
+      "claim": "Synthetic deployment event is at 10:08Z."
+    }
+  ],
+  "findings": [],
+  "changed_files": [],
+  "tests": [],
+  "blockers": [],
+  "reviewed_tasks": []
+}

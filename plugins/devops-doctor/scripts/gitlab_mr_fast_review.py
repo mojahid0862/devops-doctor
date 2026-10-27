@@ -1,91 +1,16 @@
 #!/usr/bin/env python3
-"""Fast read-only GitLab MR score helper using glab only."""
-
+"""Bounded read-only MR checks; heuristic scores never authorize merging."""
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import re
-import shutil
-import subprocess
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
-
-ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-SECRET_PATTERNS = [
-    (re.compile(r"(?i)(authorization:\s*bearer\s+)[^\s]+"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(private-token:\s*)[^\s]+"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(token|password|passwd|secret|key)(\s*[:=]\s*)([^\s\"']+)"), r"\1\2[REDACTED]"),
-    (re.compile(r"AKIA[0-9A-Z]{16}"), "[REDACTED_AWS_ACCESS_KEY_ID]"),
-]
-
-KNOWN_GLAB_PATHS = [
-    r"D:\apps\Git\cmd\glab.cmd",
-    str(Path.home() / "AppData" / "Local" / "Programs" / "glab" / "glab.exe"),
-]
-
-
-def find_glab() -> str | None:
-    found = shutil.which("glab")
-    if found:
-        return found
-    return next((path for path in KNOWN_GLAB_PATHS if Path(path).exists()), None)
-
-
-def redact(text: str) -> str:
-    cleaned = ANSI_RE.sub("", text)
-    for pattern, replacement in SECRET_PATTERNS:
-        cleaned = pattern.sub(replacement, cleaned)
-    return cleaned
-
-
-def truncate(text: str, max_chars: int = 50000) -> str:
-    cleaned = redact(text)
-    if len(cleaned) <= max_chars:
-        return cleaned
-    return cleaned[: max_chars // 2] + "\n...[truncated]...\n" + cleaned[-max_chars // 2 :]
-
-
-def run_glab(glab: str, args: list[str], *, timeout: int = 60, parse_json: bool = True) -> dict[str, Any]:
-    command = [glab, *args]
-    try:
-        completed = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            env={**os.environ, "NO_COLOR": "1"},
-        )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "timeout", "command": " ".join(command)}
-
-    stdout = completed.stdout.strip()
-    stderr = completed.stderr.strip()
-    result: dict[str, Any] = {"ok": completed.returncode == 0, "command": " ".join(command)}
-    if completed.returncode != 0:
-        result["error"] = redact(stderr or stdout)[-2000:]
-        return result
-
-    if parse_json:
-        try:
-            result["data"] = json.loads(stdout) if stdout else None
-        except json.JSONDecodeError:
-            result["data"] = truncate(stdout, 8000)
-    else:
-        result["data"] = truncate(stdout)
-    return result
-
-
-def api_project(repo: str, *parts: str) -> str:
-    return "/".join(["projects", quote(repo, safe=""), *[str(part).strip("/") for part in parts]])
+from doctor_common import emit_result
+from gitlab_mr_snapshot import (api_project, auth_failure, find_glab, page_limit,
+    positive_int, result_blockers, run_glab, run_glab_tasks)
 
 
 def changed_paths(diff_text: str) -> list[str]:
@@ -161,6 +86,7 @@ def scan_diff(diff_text: str) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     rules = [
         ("high", "secret_like_value", re.compile(r"(?i)(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{12,}")),
+        ("high", "redacted_sensitive_value", re.compile(r"\[REDACTED[^\]]*\]")),
         ("high", "aws_access_key_id", re.compile(r"AKIA[0-9A-Z]{16}")),
         ("high", "private_key_marker", re.compile(r"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----")),
         ("high", "open_network_cidr", re.compile(r"0\.0\.0\.0/0|::/0")),
@@ -185,43 +111,56 @@ def status_values(result: dict[str, Any]) -> list[str]:
     return [str(item.get("status", "")).lower() for item in data if isinstance(item, dict)]
 
 
-def score_review(findings: list[dict[str, Any]], ci_statuses: list[str], mr_state: str | None) -> tuple[int, str, list[str]]:
-    score = 100
+def score_review(findings: list[dict[str, Any]], ci_statuses: list[str],
+                 mr_state: str | None, *, evidence_complete: bool = True) -> tuple[int, str, list[str]]:
+    score = max(0, 100 - sum({"critical": 50, "high": 30, "medium": 15, "low": 5}.get(item.get("severity"), 0) for item in findings))
     reasons: list[str] = []
-    severities = [item.get("severity") for item in findings]
-    for severity in severities:
-        if severity == "critical":
-            score -= 50
-            score = min(score, 49)
-        elif severity == "high":
-            score -= 30
-            score = min(score, 59)
-        elif severity == "medium":
-            score -= 15
-        elif severity == "low":
-            score -= 5
+    if not evidence_complete:
+        reasons.append("required evidence is missing, failed, or incomplete")
+    if not ci_statuses:
+        reasons.append("CI is unverified for the current head SHA")
+    elif any(status != "success" for status in ci_statuses):
+        reasons.append("CI for the current head SHA is not entirely successful")
+    if mr_state != "opened":
+        reasons.append("merge request is not open")
+    if any(item.get("severity") in {"critical", "high"} for item in findings):
+        reasons.append("high or critical finding requires review")
+    return score, "Blocked: review required" if reasons else "Evidence checks passed; review required", reasons
 
-    if any(status in {"failed", "canceled"} for status in ci_statuses):
-        score -= 25
-        score = min(score, 59)
-        reasons.append("required CI has failed/canceled status")
-    elif not ci_statuses and mr_state != "merged":
-        score -= 10
-        reasons.append("CI status is unknown on an unmerged MR")
 
-    score = max(score, 0)
-    has_blocker = any(sev in {"critical", "high"} for sev in severities)
-    verdict = "All good, can merge" if score >= 60 and not has_blocker else "Do not merge yet"
-    if has_blocker:
-        reasons.append("high or critical finding present")
-    return score, verdict, reasons
+def ci_for_head(statuses: dict[str, Any], pipelines: dict[str, Any], sha: str | None) -> list[str]:
+    """Only exact-head evidence counts; old pipelines cannot validate a new push."""
+    if not sha:
+        return []
+    values: list[str] = []
+    rows = statuses.get("data") if statuses.get("ok") else []
+    if isinstance(rows, list):
+        # The commit-status endpoint is explicitly scoped to this SHA. When a
+        # response includes sha, reject a mismatch as well.
+        latest: dict[str, dict[str, Any]] = {}
+        for item in rows:
+            if not isinstance(item, dict) or item.get("sha", sha) != sha:
+                continue
+            name = str(item.get("name") or item.get("context") or item.get("id"))
+            old = latest.get(name)
+            if old is None or int(item.get("id") or 0) > int(old.get("id") or 0):
+                latest[name] = item
+        values.extend(str(item.get("status") or "unknown").lower() for item in latest.values())
+    rows = pipelines.get("data") if pipelines.get("ok") else []
+    exact = [item for item in rows if isinstance(item, dict) and item.get("sha") == sha] if isinstance(rows, list) else []
+    if exact:
+        newest = max(exact, key=lambda item: int(item.get("id") or 0))
+        values.append(str(newest.get("status") or "unknown").lower())
+    return values
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Fast read-only GitLab MR score using glab only.")
-    parser.add_argument("--repo", required=True, help="GitLab project path, for example group/project.")
-    parser.add_argument("--mr-iid", required=True, help="Merge request IID.")
-    parser.add_argument("--output", help="Write JSON result to this path.")
+    parser = argparse.ArgumentParser(description="Bounded read-only GitLab MR checks using glab only.")
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--mr-iid", required=True)
+    parser.add_argument("--max-workers", type=positive_int, default=4)
+    parser.add_argument("--max-pages", type=page_limit, default=5)
+    parser.add_argument("--output")
     return parser.parse_args()
 
 
@@ -229,84 +168,58 @@ def main() -> int:
     args = parse_args()
     glab = find_glab()
     if not glab:
-        print("glab not found in PATH or known local install paths.", file=sys.stderr)
+        print("glab not found; check PATH or DEVOPS_DOCTOR_GLAB.", file=sys.stderr)
         return 2
-
     auth = run_glab(glab, ["auth", "status"], timeout=30, parse_json=False)
-    mr_view = run_glab(glab, ["mr", "view", args.mr_iid, "--repo", args.repo, "--output", "json"], timeout=45)
-    mr_api = run_glab(glab, ["api", api_project(args.repo, "merge_requests", args.mr_iid)], timeout=45)
-    diff = run_glab(glab, ["mr", "diff", args.mr_iid, "--repo", args.repo], timeout=75, parse_json=False)
-
-    mr_data = mr_api.get("data") if isinstance(mr_api.get("data"), dict) else {}
-    if not mr_data and isinstance(mr_view.get("data"), dict):
-        mr_data = mr_view["data"]
-    sha = mr_data.get("sha") or mr_data.get("head_sha")
-    merge_sha = mr_data.get("merge_commit_sha")
-    mr_state = mr_data.get("state")
-
-    pipelines = run_glab(glab, ["api", api_project(args.repo, "merge_requests", args.mr_iid, "pipelines")], timeout=45)
-    statuses = run_glab(glab, ["api", api_project(args.repo, "repository", "commits", sha, "statuses")], timeout=45) if sha else {"ok": False, "error": "missing sha"}
-    merge_statuses = None
-    if not status_values(statuses) and merge_sha:
-        merge_statuses = run_glab(glab, ["api", api_project(args.repo, "repository", "commits", merge_sha, "statuses")], timeout=45)
-
-    diff_text = str(diff.get("data", "")) if diff.get("ok") else ""
-    paths = changed_paths(diff_text)
-    findings = scan_diff(diff_text)
-    ci_values = status_values(statuses) or status_values(merge_statuses or {}) or [str(item.get("status", "")).lower() for item in pipelines.get("data", []) if isinstance(item, dict)]
-    score, verdict, score_reasons = score_review(findings, ci_values, str(mr_state) if mr_state else None)
-
-    blockers = []
-    for name, result in {"auth": auth, "mr_view": mr_view, "mr_api": mr_api, "diff": diff, "pipelines": pipelines, "statuses": statuses}.items():
-        if not result.get("ok"):
-            blockers.append({"scope": name, "reason": result.get("error", "command failed")})
-
-    result = {
-        "summary": {
-            "repo": args.repo,
-            "mr_iid": args.mr_iid,
-            "title": mr_data.get("title"),
-            "state": mr_state,
-            "source_branch": mr_data.get("source_branch"),
-            "target_branch": mr_data.get("target_branch"),
-            "sha": sha,
-            "merge_commit_sha": merge_sha,
-            "changed_files": len(paths),
-            "score": score,
-            "verdict": verdict,
-            "score_reasons": score_reasons,
-            "ci_statuses": ci_values,
-        },
-        "findings": findings,
-        "evidence": {
-            "changed_paths": paths,
-            "risk_buckets": risk_buckets(paths),
-            "pipeline_count": len(pipelines.get("data") or []) if pipelines.get("ok") else None,
-        },
-        "blockers": blockers,
-        "next_commands": [
-            f"glab mr view {args.mr_iid} --repo {args.repo} --output json",
-            f"glab mr diff {args.mr_iid} --repo {args.repo}",
-        ],
-        "raw": {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "glab_path": glab,
-            "auth": auth,
-            "mr_view": mr_view,
-            "mr_api": mr_api,
-            "pipelines": pipelines,
-            "statuses": statuses,
-            "merge_statuses": merge_statuses,
-            "diff": {"ok": diff.get("ok"), "command": diff.get("command"), "error": diff.get("error"), "data": truncate(diff_text, 50000)},
-        },
+    if not auth.get("ok"):
+        return emit_result(auth_failure(auth, args.repo), args.output)
+    tasks = {
+        "merge_request": (["api", api_project(args.repo, "merge_requests", args.mr_iid)], {}),
+        "diff": (["mr", "diff", args.mr_iid, "--repo", args.repo], {"timeout": 75, "parse_json": False, "text_limit": 200000}),
+        "pipelines": (["api", api_project(args.repo, "merge_requests", args.mr_iid, "pipelines")], {"max_pages": args.max_pages}),
     }
-
-    payload = json.dumps(result, indent=2, sort_keys=True, default=str)
-    if args.output:
-        Path(args.output).write_text(payload + "\n", encoding="utf-8")
+    evidence = run_glab_tasks(glab, tasks, args.max_workers)
+    mr = evidence["merge_request"].get("data") or {}
+    if not isinstance(mr, dict):
+        evidence["merge_request"] = {**evidence["merge_request"], "ok": False, "error": "invalid merge request response"}
+        mr = {}
+    sha = mr.get("sha") or mr.get("head_sha")
+    if sha:
+        evidence.update(run_glab_tasks(glab, {"statuses": (["api", api_project(args.repo, "repository", "commits", str(sha), "statuses")],
+                                                                  {"max_pages": args.max_pages})}, args.max_workers))
     else:
-        print(payload)
-    return 0
+        evidence["statuses"] = {"ok": False, "error": "missing current head SHA"}
+    diff = evidence["diff"]
+    diff_text = diff.get("data") if diff.get("ok") else ""
+    if not isinstance(diff_text, str):
+        diff_text = ""
+    paths = changed_paths(diff_text)
+    blockers = result_blockers(evidence)
+    if not diff_text.strip():
+        blockers.append({"scope": "diff", "reason": "no reviewable diff retrieved"})
+    changes_count = mr.get("changes_count")
+    if changes_count is None or not str(changes_count).isdigit() or int(changes_count) != len(paths):
+        blockers.append({"scope": "diff", "reason": "cannot verify complete diff against MR changes_count"})
+    if mr.get("draft") or mr.get("work_in_progress"):
+        blockers.append({"scope": "merge_request", "reason": "merge request is a draft"})
+    if mr.get("has_conflicts"):
+        blockers.append({"scope": "merge_request", "reason": "merge request has conflicts"})
+    findings = scan_diff(diff_text)
+    ci_values = ci_for_head(evidence["statuses"], evidence["pipelines"], str(sha) if sha else None)
+    score, verdict, reasons = score_review(findings, ci_values, mr.get("state"), evidence_complete=not blockers)
+    for reason in reasons:
+        if reason != "required evidence is missing, failed, or incomplete":
+            blockers.append({"scope": "review", "reason": reason})
+    result = {
+        "summary": {"repo": args.repo, "mr_iid": args.mr_iid, "title": mr.get("title"), "state": mr.get("state"),
+                    "source_branch": mr.get("source_branch"), "target_branch": mr.get("target_branch"), "sha": sha,
+                    "merge_commit_sha": mr.get("merge_commit_sha"), "changed_files": len(paths), "score": score,
+                    "score_kind": "heuristic_only", "verdict": verdict, "score_reasons": reasons, "ci_statuses": ci_values},
+        "findings": findings, "evidence": {"changed_paths": paths, "risk_buckets": risk_buckets(paths)},
+        "blockers": blockers, "next_commands": [f"glab mr view {args.mr_iid} --repo {args.repo}"],
+        "raw": {"generated_at": datetime.now(timezone.utc).isoformat(), "auth": auth, **evidence},
+    }
+    return emit_result(result, args.output)
 
 
 if __name__ == "__main__":
