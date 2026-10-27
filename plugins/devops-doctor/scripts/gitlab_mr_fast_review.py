@@ -154,6 +154,47 @@ def ci_for_head(statuses: dict[str, Any], pipelines: dict[str, Any], sha: str | 
     return values
 
 
+def revision_refs(data: Any, *, version: bool = False) -> dict[str, str] | None:
+    """Require provenance for the source head and both target-side diff refs."""
+    if not isinstance(data, dict):
+        return None
+    source = data if version else data.get("diff_refs")
+    if not isinstance(source, dict):
+        return None
+    refs = {name + "_sha": source.get(name + ("_commit_sha" if version else "_sha"))
+            for name in ("head", "base", "start")}
+    if not all(isinstance(value, str) and value.strip() for value in refs.values()):
+        return None
+    if not version and data.get("sha") != refs["head_sha"]:
+        return None
+    return refs
+
+
+def validate_diff_version(result: dict[str, Any], refs: dict[str, str], version_id: int) -> dict[str, Any]:
+    if not result.get("ok"):
+        return result
+    data = result.get("data")
+    reason = None
+    if not isinstance(data, dict) or data.get("id") != version_id or revision_refs(data, version=True) != refs:
+        reason = "diff version provenance does not match MR head/base/start refs"
+    elif data.get("state") != "collected" or data.get("overflow"):
+        reason = "GitLab diff version is not completely collected"
+    else:
+        diffs = data.get("diffs")
+        if not isinstance(diffs, list) or not all(isinstance(item, dict) and
+                isinstance(item.get("old_path"), str) and item["old_path"] and
+                isinstance(item.get("new_path"), str) and item["new_path"] and
+                isinstance(item.get("diff"), str) for item in diffs):
+            reason = "invalid or missing file diffs in pinned version"
+        elif any(item.get("collapsed") or item.get("too_large") for item in diffs):
+            reason = "GitLab omitted one or more file diffs"
+        elif any(not item["diff"].strip() and not item.get("renamed_file") and
+                 not (item.get("a_mode") and item.get("b_mode") and item["a_mode"] != item["b_mode"])
+                 for item in diffs):
+            reason = "file diff content is missing from pinned version"
+    return {**result, "complete": False, "error": reason} if reason else result
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bounded read-only GitLab MR checks using glab only.")
     parser.add_argument("--repo", required=True)
@@ -175,7 +216,8 @@ def main() -> int:
         return emit_result(auth_failure(auth, args.repo), args.output)
     tasks = {
         "merge_request": (["api", api_project(args.repo, "merge_requests", args.mr_iid)], {}),
-        "diff": (["mr", "diff", args.mr_iid, "--repo", args.repo], {"timeout": 75, "parse_json": False, "text_limit": 200000}),
+        # Only the newest version is needed; a race or stale version fails closed.
+        "latest_diff_version": (["api", api_project(args.repo, "merge_requests", args.mr_iid, "versions") + "?per_page=1"], {}),
         "pipelines": (["api", api_project(args.repo, "merge_requests", args.mr_iid, "pipelines")], {"max_pages": args.max_pages}),
     }
     evidence = run_glab_tasks(glab, tasks, args.max_workers)
@@ -184,18 +226,40 @@ def main() -> int:
         evidence["merge_request"] = {**evidence["merge_request"], "ok": False, "error": "invalid merge request response"}
         mr = {}
     sha = mr.get("sha") or mr.get("head_sha")
-    if sha:
-        evidence.update(run_glab_tasks(glab, {"statuses": (["api", api_project(args.repo, "repository", "commits", str(sha), "statuses")],
-                                                                  {"max_pages": args.max_pages})}, args.max_workers))
+    refs = revision_refs(mr)
+    versions = evidence["latest_diff_version"]
+    rows = versions.get("data") if versions.get("ok") else None
+    version = rows[0] if isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict) else {}
+    version_id = version.get("id")
+    if not refs:
+        evidence["merge_request"].update(complete=False, error=evidence["merge_request"].get("error") or "missing or inconsistent MR head/base/start refs")
+    if (not refs or revision_refs(version, version=True) != refs or
+            type(version_id) is not int or version_id < 1 or version.get("state") != "collected"):
+        evidence["latest_diff_version"].update(complete=False, error=versions.get("error") or "cannot identify a complete diff version matching MR refs")
+        version_id = None
+    if refs and version_id:
+        evidence.update(run_glab_tasks(glab, {
+            "diff": (["api", api_project(args.repo, "merge_requests", args.mr_iid, "versions", str(version_id))], {"timeout": 75}),
+            "statuses": (["api", api_project(args.repo, "repository", "commits", refs["head_sha"], "statuses")], {"max_pages": args.max_pages}),
+        }, args.max_workers))
+        evidence["diff"] = validate_diff_version(evidence["diff"], refs, version_id)
+        # The immutable diff cannot race a push. Recheck once after collection to
+        # avoid calling its CI evidence current when the MR has since changed.
+        check = run_glab(glab, ["api", api_project(args.repo, "merge_requests", args.mr_iid)])
+        if check.get("ok") and revision_refs(check.get("data")) != refs:
+            check.update(complete=False, error="MR head/base/start refs changed or became unverifiable during collection")
+        elif check.get("ok"):
+            mr = check["data"]
+        evidence["revision_check"] = check
     else:
-        evidence["statuses"] = {"ok": False, "error": "missing current head SHA"}
+        evidence["diff"] = {"ok": False, "error": "missing verified MR diff version"}
+        evidence["statuses"] = {"ok": False, "error": "missing verified MR revision"}
     diff = evidence["diff"]
-    diff_text = diff.get("data") if diff.get("ok") else ""
-    if not isinstance(diff_text, str):
-        diff_text = ""
-    paths = changed_paths(diff_text)
+    diff_data = diff.get("data") if diff.get("ok") and diff.get("complete") is not False else None
+    files = diff_data["diffs"] if isinstance(diff_data, dict) else []
+    paths = list(dict.fromkeys(item["new_path"] for item in files))
     blockers = result_blockers(evidence)
-    if not diff_text.strip():
+    if not files:
         blockers.append({"scope": "diff", "reason": "no reviewable diff retrieved"})
     changes_count = mr.get("changes_count")
     if changes_count is None or not str(changes_count).isdigit() or int(changes_count) != len(paths):
@@ -204,7 +268,7 @@ def main() -> int:
         blockers.append({"scope": "merge_request", "reason": "merge request is a draft"})
     if mr.get("has_conflicts"):
         blockers.append({"scope": "merge_request", "reason": "merge request has conflicts"})
-    findings = scan_diff(diff_text)
+    findings = [{**finding, "path": item["new_path"]} for item in files for finding in scan_diff(item["diff"])]
     ci_values = ci_for_head(evidence["statuses"], evidence["pipelines"], str(sha) if sha else None)
     score, verdict, reasons = score_review(findings, ci_values, mr.get("state"), evidence_complete=not blockers)
     for reason in reasons:
@@ -215,7 +279,8 @@ def main() -> int:
                     "source_branch": mr.get("source_branch"), "target_branch": mr.get("target_branch"), "sha": sha,
                     "merge_commit_sha": mr.get("merge_commit_sha"), "changed_files": len(paths), "score": score,
                     "score_kind": "heuristic_only", "verdict": verdict, "score_reasons": reasons, "ci_statuses": ci_values},
-        "findings": findings, "evidence": {"changed_paths": paths, "risk_buckets": risk_buckets(paths)},
+        "findings": findings, "evidence": {"changed_paths": paths, "risk_buckets": risk_buckets(paths),
+                                         "diff_refs": refs, "diff_version_id": version_id},
         "blockers": blockers, "next_commands": [f"glab mr view {args.mr_iid} --repo {args.repo}"],
         "raw": {"generated_at": datetime.now(timezone.utc).isoformat(), "auth": auth, **evidence},
     }

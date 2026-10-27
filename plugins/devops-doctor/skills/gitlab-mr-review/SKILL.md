@@ -9,14 +9,14 @@ Read [the evidence contract](../devops-doctor/references/evidence-contract.md). 
 
 ## Fast path
 
-1. Resolve project, host, and MR IID. Keep metadata/diff/CI tied to the same current head SHA. For a self-managed host, use the user's existing `glab` host configuration and verify the target.
+1. Resolve project, host, and MR IID. Keep metadata/diff/CI tied to the same current head SHA and matching base/start diff refs. For a self-managed host, use the user's existing `glab` host configuration and verify the target.
 2. Choose the helper OR equivalent direct calls, not both:
 
 ```bash
 python "<plugin-root>/scripts/gitlab_mr_fast_review.py" --repo <group/project> --mr-iid <iid> --output <work-dir>/mr-review.json
 ```
 
-Equivalent reads start with `glab auth status`, `glab mr view <iid> --repo <group/project> --output json`, and `glab mr diff <iid> --repo <group/project>`. Query current-SHA CI only as needed. The helper's bounded pagination and concurrent reads reduce redundant work.
+For equivalent direct reads, use `glab auth status` and `glab api` to collect MR metadata and its latest collected diff version. Fetch that version by ID, verify matching head/base/start refs, query current-SHA CI, then reread MR refs once to detect drift. A mutable `glab mr diff` read alone does not establish revision provenance. Missing refs, omitted content, or changed revisions leave the review incomplete. The helper bounds pagination and runs independent reads concurrently.
 
 3. Review the actual changed code, including context needed to prove a finding. The helper's pattern findings are triage hints, not a code review. Missing/clipped diff means incomplete review.
 4. Expand to raw file context, discussions, checkout, traces, or tests only when a finding needs proof, CI failed, high-risk changes need deeper validation, or the user requests a deep review.

@@ -22,6 +22,14 @@ _HEADER = re.compile(r"(?im)((?:authorization|proxy-authorization|private-token|
 _URL = re.compile(r"(?:https?|postgres(?:ql)?|mysql|redis(?:s)?)://[^\s<>\"']+", re.I)
 _PEM = re.compile(r"-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----", re.S)
 _KNOWN_TOKEN = re.compile(r"\b(?:(?:AKIA|ASIA)[A-Z0-9]{16}|glpat-[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9_]{20,}|eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b")
+_CLI_SECRET = re.compile(r'''(?ix)
+    (--[\w-]*(?:token|password|passwd|secret|api[_-]?key|access[_-]?key|credential|authorization|cookie)[\w-]*)
+    ((?:\s+|=)(?:[\\`]\r?\n[ \t]*)*)
+    ((?:\\"(?:`\\"|\\\\.|\\[^"]|[^\\])*(?:\\"|$)
+       |"(?:[\\`][\s\S]|[^"\\`])*(?:"|$)
+       |'(?:[\\`][\s\S]|[^'\\`])*(?:'|$)
+       |[\\`](?:\r?\n|[^\r\n])|[^\s"'\\`])+)
+''')
 
 
 def secret_key(key: str) -> bool:
@@ -50,9 +58,27 @@ def redact(text: str) -> str:
     cleaned = _PEM.sub(MASK, str(text))
     cleaned = _URL.sub(_safe_url, cleaned)
     cleaned = _HEADER.sub(lambda m: m.group(1) + MASK, cleaned)
+    cleaned = _CLI_SECRET.sub(lambda m: m.group(1) + m.group(2) + MASK if secret_key(m.group(1)) else m.group(0), cleaned)
     cleaned = _ASSIGNMENT.sub(lambda m: m.group(1) + MASK, cleaned)
-    cleaned = re.sub(r"(?i)(--(?:token|password|secret|api-key)\s+)\S+", lambda m: m.group(1) + MASK, cleaned)
     return _KNOWN_TOKEN.sub(MASK, cleaned)
+
+
+def redacted_command(command: list[str]) -> str:
+    """Mask secret arguments before joining; argv values may contain whitespace."""
+    safe = []
+    hide_next = False
+    for argument in command:
+        if hide_next:
+            safe.append(MASK)
+            hide_next = False
+            continue
+        flag, separator, _ = argument.partition("=")
+        if flag.startswith("--") and secret_key(flag):
+            safe.append(flag + "=" + MASK if separator else flag)
+            hide_next = not separator
+        else:
+            safe.append(redact(argument))
+    return " ".join(safe)
 
 
 def sanitize(value: Any) -> Any:
@@ -95,7 +121,7 @@ def configure_concurrency(max_workers: int) -> None:
 
 def run_command(command: list[str], *, timeout: int = 60, parse_json: bool = True, text_limit: int | None = None) -> dict[str, Any]:
     started = time.monotonic()
-    result: dict[str, Any] = {"ok": False, "command": redact(" ".join(command)), "returncode": None, "truncated": False}
+    result: dict[str, Any] = {"ok": False, "command": redacted_command(command), "returncode": None, "truncated": False}
     env = dict(os.environ)
     env.update({"AWS_PAGER": "", "AWS_CLI_AUTO_PROMPT": "off", "GLAB_PAGER": "", "GIT_PAGER": "cat", "GIT_TERMINAL_PROMPT": "0"})
     try:

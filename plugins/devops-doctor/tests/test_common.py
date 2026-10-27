@@ -26,6 +26,70 @@ class CommonTests(unittest.TestCase):
         self.assertEqual(out["NextToken"], "page-marker")
         self.assertEqual(out["resource"], data["resource"])
 
+    def test_cli_trace_masks_entire_quoted_or_escaped_secret(self):
+        values = ['"sentinel first suffix"', "'sentinel first suffix'", r'sentinel\ first\ suffix',
+                  '"sentinel first"suffix', r'"sentinel\" first suffix"',
+                  '"sentinel first suffix', "'sentinel first suffix"]
+        for flag in ('--password', '--token', '--secret', '--api-key', '--client-secret'):
+            for value in values:
+                for separator in (' ', '=', '\n', '\r\n'):
+                    with self.subTest(flag=flag, value=value, separator=separator):
+                        result = common.redact('cmd ' + flag + separator + value)
+                        self.assertNotIn('sentinel', result)
+                        self.assertNotIn('suffix', result)
+                        self.assertEqual(common.redact(result), result)
+
+    def test_cli_trace_preserves_following_nonsecret_options(self):
+        result = common.redact('cmd --password "sentinel suffix" --region us-east-1 --next-token page-marker')
+        self.assertEqual(result, 'cmd --password [REDACTED] --region us-east-1 --next-token page-marker')
+
+    def test_cli_trace_handles_shell_continuations_and_powershell_escapes(self):
+        for escape in ('\\', '`'):
+            for newline in ('\n', '\r\n'):
+                values = [escape + newline + ' "sentinel first suffix"',
+                          'sentinel' + escape + newline + 'suffix',
+                          '"sentinel' + escape + newline + 'suffix"',
+                          'sentinel' + escape + ' first' + escape + ' suffix']
+                for value in values:
+                    for separator in (' ', '='):
+                        result = common.redact('cmd --password' + separator + value)
+                        self.assertNotIn('sentinel', result)
+                        self.assertNotIn('suffix', result)
+
+    @patch('doctor_common.subprocess.run')
+    def test_json_escaped_log_commands_do_not_leak_quoted_values(self, run):
+        for value in ('"sentinel first suffix"', r'"sentinel\" first suffix"', '"sentinel`" first suffix"'):
+            trace = 'INFO ' + json.dumps({'command': 'cmd --password ' + value + ' --region us-east-1'})
+            for code in (0, 1):
+                run.return_value = CompletedProcess([], code, trace, trace)
+                result = common.run_command(['example'], parse_json=False)
+                serialized = json.dumps(common.sanitize(result))
+                self.assertNotIn('sentinel', serialized)
+                self.assertNotIn('suffix', serialized)
+
+    @patch('doctor_common.subprocess.run')
+    def test_command_metadata_preserves_argv_boundaries_before_redaction(self, run):
+        run.return_value = CompletedProcess([], 0, 'ok', '')
+        for value in ('sentinel first suffix', 'sentinel\nsecond suffix', '"sentinel suffix"'):
+            for command in (['example', '--password', value, '--region', 'us-east-1'],
+                            ['example', '--password=' + value, '--region', 'us-east-1']):
+                with self.subTest(command=command):
+                    result = common.run_command(command, parse_json=False)
+                    self.assertNotIn('sentinel', json.dumps(common.sanitize(result)))
+                    self.assertNotIn('suffix', result['command'])
+                    self.assertIn('--region us-east-1', result['command'])
+                    self.assertEqual(run.call_args.args[0], command)
+
+    @patch('doctor_common.subprocess.run')
+    def test_command_stdout_and_error_redact_quoted_secret(self, run):
+        trace = 'cmd --password "sentinel first suffix" --region us-east-1'
+        for code in (0, 1):
+            run.return_value = CompletedProcess([], code, trace, trace)
+            result = common.run_command(['example'], parse_json=False)
+            serialized = json.dumps(common.sanitize(result))
+            self.assertNotIn('sentinel', serialized)
+            self.assertNotIn('suffix', serialized)
+
     @patch("doctor_common.subprocess.run")
     def test_json_is_not_tail_truncated(self, run):
         run.return_value = CompletedProcess([], 0, json.dumps({"items": list(range(1500)), "password": "sentinel"}), "")

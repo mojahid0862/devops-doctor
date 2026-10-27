@@ -1,4 +1,4 @@
-# DevOps Doctor 0.3.5
+# DevOps Doctor 0.3.6
 
 Read-only diagnostic skills and Python helpers for GitLab and AWS, plus offline Terraform, repo, and saved-finding reviews.
 
@@ -101,10 +101,14 @@ python -B tools/benchmark_offline.py
 
 Validation checks manifests, skill references, Python syntax, CLI help, and offline regression tests. The benchmark uses mocked delays; it is not an AWS/GitLab production latency measurement. No live cloud changes are part of validation.
 
+The repository-root GitHub Actions workflow runs release validation on Linux and Windows with Python 3.10 and 3.12 for relevant pull requests and pushes to `main`.
+
+MR reviews now require a collected diff version matching the MR head/base/start refs, SHA-scoped CI, and a final revision check. Missing provenance, omitted diff content, or a revision change leaves evidence partial. `raw.diff.data` now contains the version object and its `diffs` array instead of text; consumers of that raw field must adapt. Summary/status fields remain unchanged, and `evidence.diff_refs` plus `evidence.diff_version_id` record provenance.
+
 ## Installation and rollback
 
 Use the packaged manifests and skills with the Codex plugin installer. For an existing local `devops-doctor@personal` entry, back up the registered source directory, replace its package contents, then run `codex plugin add devops-doctor@personal`. Open a new chat to load the updated skill instructions. To roll back, restore the previous source package and reinstall that same entry.
 
-Public publishing is a separate action; this release does not publish or push a repository.
+The plugin's diagnostic helpers do not publish packages or push repositories.
 
 Design references: [OpenAI skill guidance](https://developers.openai.com/plugins/build/skills) and [native multi-agent coordination](https://developers.openai.com/api/docs/guides/responses-multi-agent). Runtime availability is checked in the active host; no API configuration is changed by this plugin.

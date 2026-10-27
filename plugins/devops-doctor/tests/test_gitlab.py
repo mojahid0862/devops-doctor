@@ -19,6 +19,18 @@ def ok(data):
     return {"ok": True, "data": data, "truncated": False, "returncode": 0}
 
 
+def mr_fixture():
+    return {"state": "opened", "sha": "a" * 40, "changes_count": "1",
+            "diff_refs": {"head_sha": "a" * 40, "base_sha": "b" * 40, "start_sha": "c" * 40}}
+
+
+def version_fixture():
+    return {"id": 7, "state": "collected", "head_commit_sha": "a" * 40,
+            "base_commit_sha": "b" * 40, "start_commit_sha": "c" * 40,
+            "diffs": [{"old_path": "main.py", "new_path": "main.py", "a_mode": "100644", "b_mode": "100644",
+                       "diff": "@@ -1 +1 @@\n-before\n+after\n"}]}
+
+
 class ExecutableDiscoveryTests(unittest.TestCase):
     def test_path_is_default(self):
         with patch.dict(mr.os.environ, {}, clear=True), patch.object(mr.shutil, "which", return_value="/usr/bin/glab") as which:
@@ -68,13 +80,12 @@ class MergeReadinessTests(unittest.TestCase):
 
     def test_main_missing_diff_blocks_with_successful_ci(self):
         args = argparse.Namespace(repo="group/repo", mr_iid="1", max_workers=2, max_pages=2, output=None)
-        first = {"merge_request": ok({"state": "opened", "sha": "head", "changes_count": "1"}),
-                 "diff": {"ok": False, "error": "403 forbidden"},
-                 "pipelines": ok([{"sha": "head", "id": 1, "status": "success"}])}
-        second = {"statuses": ok([])}
+        first = {"merge_request": ok(mr_fixture()), "latest_diff_version": ok([version_fixture()]),
+                 "pipelines": ok([{"sha": "a" * 40, "id": 1, "status": "success"}])}
+        second = {"statuses": ok([]), "diff": {"ok": False, "error": "403 forbidden"}}
         output = io.StringIO()
         with patch.object(fast, "parse_args", return_value=args), patch.object(fast, "find_glab", return_value="glab"), \
-             patch.object(fast, "run_glab", return_value=ok("authenticated")), \
+             patch.object(fast, "run_glab", side_effect=[ok("authenticated"), ok(mr_fixture())]), \
              patch.object(fast, "run_glab_tasks", side_effect=[first, second]), contextlib.redirect_stdout(output):
             code = fast.main()
         result = json.loads(output.getvalue())
@@ -92,6 +103,106 @@ class MergeReadinessTests(unittest.TestCase):
                 self.assertNotEqual(0, module.main())
                 read.assert_called_once()
                 fetch.assert_not_called()
+
+
+class RevisionConsistencyTests(unittest.TestCase):
+    def review(self, *, metadata=None, latest=None, diff=None, final=None):
+        args = argparse.Namespace(repo="group/repo", mr_iid="1", max_workers=2, max_pages=2, output=None)
+        version = version_fixture()
+        first = {"merge_request": ok(mr_fixture() if metadata is None else metadata),
+                 "latest_diff_version": ok([{key: value for key, value in version.items() if key != "diffs"}]) if latest is None else latest,
+                 "pipelines": ok([{"sha": "a" * 40, "id": 1, "status": "success"}])}
+        second = {"statuses": ok([]), "diff": ok(version) if diff is None else diff}
+        output = io.StringIO()
+        with patch.object(fast, "parse_args", return_value=args), patch.object(fast, "find_glab", return_value="glab"), \
+             patch.object(fast, "run_glab", side_effect=[ok("authenticated"), ok(mr_fixture()) if final is None else final]) as read, \
+             patch.object(fast, "run_glab_tasks", side_effect=[first, second]) as fetch, contextlib.redirect_stdout(output):
+            code = fast.main()
+        return code, json.loads(output.getvalue()), fetch.call_args_list, read.call_args_list
+
+    def assert_incomplete(self, outcome, scope):
+        code, result, _, _ = outcome
+        self.assertEqual(1, code)
+        self.assertFalse(result["collection"]["complete"])
+        self.assertTrue(result["summary"]["verdict"].startswith("Blocked"))
+        self.assertIn(scope, [item["scope"] for item in result["blockers"]])
+
+    def test_stable_revision_uses_pinned_diff_and_one_final_check(self):
+        code, result, fetches, reads = self.review()
+        self.assertEqual(0, code)
+        self.assertTrue(result["collection"]["complete"])
+        self.assertEqual(mr_fixture()["diff_refs"], result["evidence"]["diff_refs"])
+        self.assertEqual(7, result["evidence"]["diff_version_id"])
+        self.assertEqual(["main.py"], result["evidence"]["changed_paths"])
+        self.assertEqual(2, len(fetches))
+        tasks = fetches[1].args[1]
+        self.assertEqual(["api", "projects/group%2Frepo/merge_requests/1/versions/7"], tasks["diff"][0])
+        self.assertIn("/commits/" + "a" * 40 + "/statuses", tasks["statuses"][0][1])
+        self.assertEqual(2, len(reads))
+        self.assertEqual(["api", "projects/group%2Frepo/merge_requests/1"], reads[-1].args[1])
+
+    def test_mixed_version_refs_block_even_when_file_count_and_ci_match(self):
+        for ref in ("head_commit_sha", "base_commit_sha", "start_commit_sha"):
+            with self.subTest(ref=ref):
+                diff = version_fixture()
+                diff[ref] = "d" * 40
+                self.assert_incomplete(self.review(diff=ok(diff)), "diff")
+
+    def test_changed_or_missing_final_refs_block(self):
+        for ref in ("head_sha", "base_sha", "start_sha", "missing"):
+            with self.subTest(ref=ref):
+                final = mr_fixture()
+                if ref == "missing":
+                    del final["diff_refs"]
+                else:
+                    final["diff_refs"][ref] = "d" * 40
+                    if ref == "head_sha":
+                        final["sha"] = "d" * 40
+                self.assert_incomplete(self.review(final=ok(final)), "revision_check")
+
+    def test_missing_initial_refs_stops_dependent_reads(self):
+        for ref in ("head_sha", "base_sha", "start_sha"):
+            with self.subTest(ref=ref):
+                metadata = mr_fixture()
+                del metadata["diff_refs"][ref]
+                outcome = self.review(metadata=metadata)
+                self.assert_incomplete(outcome, "merge_request")
+                self.assertEqual(1, len(outcome[2]))
+                self.assertEqual(1, len(outcome[3]))
+
+    def test_stale_or_unverifiable_version_lookup_stops_dependent_reads(self):
+        for change in ({"head_commit_sha": "d" * 40}, {"base_commit_sha": None}, {"id": None}, {"state": "overflow"}):
+            with self.subTest(change=change):
+                version = version_fixture()
+                version.update(change)
+                outcome = self.review(latest=ok([version]))
+                self.assert_incomplete(outcome, "latest_diff_version")
+                self.assertEqual(1, len(outcome[2]))
+                self.assertEqual(1, len(outcome[3]))
+
+    def test_missing_or_mismatched_diff_provenance_blocks(self):
+        for change in ({"head_commit_sha": None}, {"base_commit_sha": None}, {"start_commit_sha": None}, {"id": 8}, {"state": "overflow"}):
+            with self.subTest(change=change):
+                version = version_fixture()
+                version.update(change)
+                self.assert_incomplete(self.review(diff=ok(version)), "diff")
+
+    def test_omitted_diff_content_blocks(self):
+        for change in ({"too_large": True}, {"collapsed": True}, {"diff": None}, {"diff": ""}):
+            with self.subTest(change=change):
+                version = version_fixture()
+                version["diffs"][0].update(change)
+                self.assert_incomplete(self.review(diff=ok(version)), "diff")
+
+    def test_final_fetch_failure_and_changed_review_state_block(self):
+        self.assert_incomplete(self.review(final={"ok": False, "error": "403 forbidden"}), "revision_check")
+        for change in ({"draft": True}, {"has_conflicts": True}, {"state": "closed"}):
+            with self.subTest(change=change):
+                final = mr_fixture()
+                final.update(change)
+                code, result, _, _ = self.review(final=ok(final))
+                self.assertNotEqual(0, code)
+                self.assertTrue(result["summary"]["verdict"].startswith("Blocked"))
 
 
 class PagingTests(unittest.TestCase):

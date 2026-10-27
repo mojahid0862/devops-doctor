@@ -1,0 +1,35 @@
+name: Offline validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/devops-doctor/**'
+      - '.github/workflows/validate.yml'
+  pull_request:
+    paths:
+      - 'plugins/devops-doctor/**'
+      - '.github/workflows/validate.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.10', '3.12']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -B plugins/devops-doctor/tools/validate_release.py

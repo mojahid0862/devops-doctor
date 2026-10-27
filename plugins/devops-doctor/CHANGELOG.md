@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.6 — 2026-10-27
+
+- Mask full secret argv values before formatting command metadata; redact quoted, escaped, multiline, and JSON-escaped CLI secrets in stdout and errors.
+- Bind MR evidence to a collected immutable diff version with matching head/base/start refs and a final revision check. Missing provenance, incomplete diffs, and changed revisions leave the review incomplete.
+- Move GitHub Actions validation to the repository root with read-only permissions, bounded runtime, superseded-run cancellation, and Linux/Windows Python 3.10/3.12 checks.
+- Add regression coverage for reproduced redaction leaks and mixed-revision evidence. Live GitLab behavior remains separately unverified.
+
+Compatibility: MR `raw.diff.data` is now a structured diff-version object containing `diffs`, not text. Summary/status fields are unchanged; evidence adds `diff_refs` and `diff_version_id`.
+
 ## 0.3.5 — 2026-10-27
 
 - Prefer narrow context, focused tool output, and reuse of fresh evidence and completed checks to reduce avoidable token use.
