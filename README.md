@@ -1,10 +1,10 @@
-# DevOps Doctor 0.3.8
+# DevOps Doctor 0.3.9
 
 DevOps Doctor is a Codex plugin for fast, read-only DevOps/SRE work across GitLab CI/CD, AWS stack health, Terraform, Docker, Kubernetes, web/mobile apps, cost review, security drift, observability, and rollback planning.
 
 It collects evidence from local authenticated CLIs and repo files, reports incomplete evidence and access blockers, and pairs production proposals with validation and rollback guidance. MR reviews require the actual diff and current-commit CI evidence; a heuristic score does not establish merge readiness.
 
-Every task now follows shared assessment, adaptive delegation, and consolidated validation across coding, reviews, CI/CD, cost, security, IaC, incidents, and health checks. The main agent shares relevant evidence once and chooses useful workers within host limits. See the [plugin guide](plugins/devops-doctor/README.md) and [changelog](plugins/devops-doctor/CHANGELOG.md).
+The main agent dispatches ready independent work before detailed investigation or waiting, shares evidence once, and balances assignments within host limits. Assigned workers execute their scope without repeating team planning; independent tests and review can overlap on frozen inputs. This applies across coding, reviews, CI/CD, cost, security, IaC, incidents, and health checks. See the [plugin guide](plugins/devops-doctor/README.md) and [changelog](plugins/devops-doctor/CHANGELOG.md).
 
 ## Install
 

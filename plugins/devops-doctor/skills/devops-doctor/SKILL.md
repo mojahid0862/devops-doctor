@@ -5,7 +5,7 @@ description: Route DevOps tasks across code review, GitLab delivery, AWS inciden
 
 # DevOps Doctor
 
-Read [the shared evidence contract](references/evidence-contract.md). Every task starts with scope/evidence assessment and a team-sizing decision. Use `$devops-team` before detailed work whenever independent branches or useful independent review justify workers, regardless of task domain or an explicit agents request. Choose the relevant specialist for each branch. Small or strictly dependent tasks stay direct; do not load every skill or collect unrelated inventory.
+Read [the shared evidence contract](references/evidence-contract.md). The main agent assesses scope/evidence and team size, then uses `$devops-team` to dispatch useful ready branches before detailed work or waits. Choose the relevant specialist for each branch. Assigned workers execute their scoped task without repeating coordinator routing. Small or strictly dependent tasks stay direct; do not load every skill or collect unrelated inventory.
 
 | User goal | Specialist |
 | --- | --- |

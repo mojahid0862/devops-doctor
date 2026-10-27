@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.9 — 2026-10-27
+
+- Dispatch useful ready work before deep coordinator reads or waits; assigned workers execute scoped tasks without repeating team planning.
+- Overlap independent tests and review on immutable inputs, make durable handoff artifacts optional, and choose review by risk/complexity rather than file count.
+- Balance oversized health groups, permit provisional source analysis with required deployed-revision reconciliation, and consider retained context cost before reusing workers.
+- Verify native execution overlap and combined token usage for performance comparisons. These instructions use host-provided agents; they cannot override runtime limits or guarantee speed or token savings.
+
 ## 0.3.8 — 2026-10-27
 
 - Apply shared task assessment, adaptive delegation, and consolidated validation to every plugin entry point, not only backend health.

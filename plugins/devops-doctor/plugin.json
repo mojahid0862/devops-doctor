@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "devops-doctor",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Read-only DevOps and SRE investigation workflows for GitLab CI/CD, AWS infrastructure, incidents, cost, security drift, observability, and rollback planning.",
   "author": {
     "name": "Mojahid Ul Haque",

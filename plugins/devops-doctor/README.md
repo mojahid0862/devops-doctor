@@ -1,4 +1,4 @@
-# DevOps Doctor 0.3.8
+# DevOps Doctor 0.3.9
 
 Read-only diagnostic skills and Python helpers for GitLab and AWS, plus offline Terraform, repo, and saved-finding reviews.
 
@@ -12,6 +12,8 @@ Read-only diagnostic skills and Python helpers for GitLab and AWS, plus offline 
 Run examples from this plugin directory. When operating inside another repo, invoke the helper by its absolute path and pass `--root` explicitly for repo scans. Never copy credential values into command arguments or this package.
 
 ## Faster scoped operation
+
+The coordinator dispatches useful independent branches before deep reads or waits. Workers receive concise assignments and execute them without repeating team planning. Independent tests and review may overlap on frozen inputs; durable handoff files are optional when useful. Performance comparisons must measure actual execution overlap, elapsed time, and available coordinator-plus-worker token totals. More workers do not guarantee less time or fewer tokens.
 
 ```bash
 python scripts/devops_doctor_preflight.py --scope local

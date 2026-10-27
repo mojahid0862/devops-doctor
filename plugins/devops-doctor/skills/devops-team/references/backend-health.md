@@ -10,11 +10,11 @@ Set one UTC window: the requested incident interval or a stated recent interval 
 
 Build a shallow map of resource IDs/types, regions, membership evidence, dependencies, and coverage/gaps. Reuse fresh task inventory. Configuration and screenshots are discovery leads, never proof of current health. Fetch enough metadata to identify relevant compute/ingress, stores/cache, and asynchronous dependencies. Bound and paginate lists; record caps, denied reads, and unresolved membership.
 
-Dispatch each group once its resources and inputs are known; continue scoped inventory while checks run. Do not wait for complete account discovery. Workers consume the shared map and return new dependencies to the main agent for ownership and follow-up.
+Dispatch each group once its resources and inputs are known, before deeper main-agent reads or a wait; continue scoped inventory while checks run. Do not wait for complete account discovery or another group's result. Workers consume the shared map and return new dependencies to the main agent for ownership and follow-up.
 
 ## Partition work and dispatch
 
-Group coupled resources and batch compatible reads; avoid a worker per API call, metric, or small resource. Example partitions:
+Group coupled resources and batch compatible reads; avoid a worker per API call, metric, or small resource. Size assignments by expected work and independent questions. These categories describe coverage, not a fixed three-worker allocation:
 
 | Group | Owned health checks |
 | --- | --- |
@@ -22,7 +22,7 @@ Group coupled resources and batch compatible reads; avoid a worker per API call,
 | Data and cache | Relevant RDS/database and cache status/events, connectivity indicators available from existing telemetry, connections, latency, errors, CPU/memory and capacity metrics |
 | Asynchronous processing | Relevant Lambda, queues/DLQs and workflows: runtime state, invocation/execution failures, throttles, backlog/age and duration metrics |
 
-Split large groups by independent service/region; merge small groups. Assign shared dependencies one owner. Include other critical dependencies only when they belong to the requested backend.
+Split oversized groups by independent service, region, or investigative question; merge small groups. Rebalance when one group contains most of the ready work, with read ownership transferred before dispatch. Assign shared dependencies one owner. Include other critical dependencies only when they belong to the requested backend.
 
 Start with useful ready groups, bounded by 20 concurrent subagents including descendants and any lower user/host limit. Subtract the main agent if included in host capacity; account for occupied slots. Choose and briefly state the initial count autonomously. Use native tools, never chats or separate Codex processes. If delegation is unavailable, check sequentially and disclose why.
 
