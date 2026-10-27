@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.7 — 2026-10-27
+
+- Route broad backend health checks to native agent teams before detailed collection, without requiring an explicit agents keyword.
+- Share one shallow inventory, dispatch independent resource groups as ready, and reuse or scale workers within host limits; combine health, evidence time, and coverage gaps centrally.
+- Prefer the available connected AWS read tool and bound total queries across workers. Preserve direct handling of small scopes and explicit fallback when workers are unavailable.
+- Keep resource discovery separate from detailed checks; no live AWS speedup or token-savings claim is introduced.
+
 ## 0.3.6 — 2026-10-27
 
 - Mask full secret argv values before formatting command metadata; redact quoted, escaped, multiline, and JSON-escaped CLI secrets in stdout and errors.

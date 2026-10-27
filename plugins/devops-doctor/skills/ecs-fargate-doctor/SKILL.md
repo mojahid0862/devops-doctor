@@ -13,13 +13,13 @@ Read [the shared evidence contract](../devops-doctor/references/evidence-contrac
 - Read-only first. Do not update services, force deploys, scale, deregister targets, or roll back without explicit approval.
 - Avoid dumping task environment variables or secret values.
 - Prefer cluster/service/task evidence over guesses.
-- Do not claim ECS current state unless it comes from AWS CLI output, repo/IaC config, user-provided logs. A blocker means evidence is unavailable, not a verified system state.
+- Claim current ECS state only from current runtime evidence with source and time, including the connected AWS read tool or CLI. Repo/IaC establishes intent; older logs or screenshots need freshness checks. A blocker means evidence is unavailable, not healthy.
 - If evidence is missing, write `Unknown:` or `Blocked:` instead of guessing.
 
 ## Workflow
 
 1. Identify cluster, service, region, task ARN, target group, log group, image tag, and last successful deployment.
-2. Capture service evidence:
+2. Reuse fresh, complete evidence for the same resource/window. Collect only missing or stale signals through the connected AWS read tool when available; do not repeat a complete snapshot. If CLI is the configured transport, the helper is:
 
 ```bash
 python "<plugin-root>/scripts/aws_deploy_snapshot.py" --region <region> --cluster <cluster> --service <service> --target-group-arn <tg-arn> --log-group <log-group> --since 2h --output ecs-snapshot.json

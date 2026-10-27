@@ -1,14 +1,15 @@
 ---
 name: devops-doctor
-description: Route cross-service DevOps investigations involving GitLab delivery, AWS incidents, infrastructure cost, security, or Terraform. Use for an ambiguous or multi-domain incident; use the narrower specialist directly when the failure domain is already clear.
+description: Route broad backend health checks and cross-service DevOps investigations involving GitLab delivery, AWS incidents, infrastructure cost, security, or Terraform. Use for requests to check all backends or multiple resource types; use the narrower specialist directly when the failure domain is already clear.
 ---
 
 # DevOps Doctor
 
-Read [the shared evidence contract](references/evidence-contract.md), then choose one specialist. Do not load every skill or run a full inventory for a narrow incident.
+Read [the shared evidence contract](references/evidence-contract.md). For a broad backend health request, route to `$devops-team` before detailed collection, even when the user never says "agents". Otherwise choose the narrowest useful specialist; do not load every skill or run a full inventory for a narrow incident.
 
 | User goal | Specialist |
 | --- | --- |
+| Check all backends, account-wide health, or multiple independent resource groups | `$devops-team` and its [backend health workflow](../devops-team/references/backend-health.md) |
 | Agents, subagents, or parallel specialist work | `$devops-team` |
 | Coordinate a multi-step GitLab/AWS investigation | `$devops-operator` |
 | Review an MR | `$gitlab-mr-review` |
@@ -25,7 +26,7 @@ Read [the shared evidence contract](references/evidence-contract.md), then choos
 
 1. Resolve the requested account/region/resource or GitLab project/MR/job. Inspect relevant local configuration; it describes intended state, not proof of deployed state.
 2. Check readiness only for the selected scope when unknown. Reuse readiness within the investigation; invalidate after auth failure or a context change. Do not run preflight immediately before a helper that already checks the same authentication.
-3. Fetch the smallest useful evidence set. Parallelize independent reads with bounded concurrency. Expand only to answer an unresolved question.
+3. Fetch the smallest useful evidence set. For broad backend checks, the main agent discovers and shares a shallow resource map, assigns independent resource groups to native subagents, and combines their health reports. Start dispatch as groups become ready; do not finish every resource check before delegating. Use direct work for small scopes and state the specific limitation when workers are unavailable. Concurrent API calls alone do not count as subagents.
 4. Correlate timestamps before assigning causality. Report observed facts, inference, incomplete coverage, and the next verification separately.
 5. For a requested fix, produce the minimal patch, validation, and rollback. Existing authorization persists; production actions beyond its scope need approval.
 

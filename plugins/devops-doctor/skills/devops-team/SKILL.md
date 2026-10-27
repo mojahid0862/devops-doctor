@@ -1,11 +1,13 @@
 ---
 name: devops-team
-description: Coordinate DevOps subagents for independent incident investigations, large MR or IaC reviews, cost analysis, and scoped local fixes. Use when the user requests agents, subagents, parallel specialist work, or a multi-domain task benefits from delegation. Keep small or strictly dependent tasks direct.
+description: Coordinate DevOps subagents for broad backend health sweeps, independent incident investigations, large MR or IaC reviews, cost analysis, and scoped local fixes. Use when independent checks benefit from parallel execution, even without an explicit request for agents. Keep small or strictly dependent tasks direct.
 ---
 
 # DevOps Team
 
 Read [the shared evidence contract](../devops-doctor/references/evidence-contract.md). This skill coordinates native agents available in the current host; installing it does not add an agent runtime or grant permissions.
+
+For broad requests such as "check backend health" or "check all backend services," follow [the backend health workflow](references/backend-health.md). Default to native delegation when two or more useful independent check groups and worker slots exist; do not wait for the user to mention agents. The main agent builds one shallow resource map, dispatches known groups as soon as their inputs are ready, and expands or reuses the team as remaining work becomes clear. Do not finish a serial health sweep before deciding whether to delegate.
 
 ## Select a team
 

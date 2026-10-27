@@ -7,21 +7,22 @@ description: Diagnose AWS deployment failures and production incidents with read
 
 Read [the shared evidence contract](../devops-doctor/references/evidence-contract.md). Resolve `<plugin-root>` from this skill's absolute path; preserve the user repository cwd.
 
+For "check all my backends" or health checks spanning independent resource groups, route to `$devops-team` and its [backend health workflow](../devops-team/references/backend-health.md) before detailed collection. Share one shallow resource map, then delegate resource health checks using available native workers. Keep this specialist direct for a single focused deployment incident.
 
 ## Rules
 
-- Use read-only AWS CLI commands first.
+- Prefer the connected read-only AWS tool when available. Use AWS CLI helpers when CLI is the configured transport; reuse verified scope/readiness rather than probing both transports.
 - Do not scale, deploy, delete, rotate, apply Terraform, modify security groups, or run rollback commands without explicit approval.
 - Confirm account/region/profile before interpreting evidence.
 - Do not print secrets, full env vars, access keys, private data, or sensitive tags.
 - Flag unsafe or breaking actions before giving commands.
-- Do not claim AWS current state unless it comes from AWS CLI output, repo/IaC config, user-provided logs. A blocker means evidence is unavailable, not a verified system state.
+- Claim current AWS state only from current runtime evidence with source and time. Repo/IaC describes intended state, and screenshots or older reports do not establish current health. A blocker means evidence is unavailable, not healthy.
 - If evidence is missing, write `Unknown:` or `Blocked:` instead of guessing.
 
 ## Workflow
 
 1. Identify service, region, account, recent change, expected health check, and user impact.
-2. Verify scope:
+2. Verify account and region through the selected transport, reusing fresh readiness. For the CLI path:
 
 ```bash
 aws sts get-caller-identity

@@ -1,4 +1,4 @@
-# DevOps Doctor 0.3.6
+# DevOps Doctor 0.3.7
 
 Read-only diagnostic skills and Python helpers for GitLab and AWS, plus offline Terraform, repo, and saved-finding reviews.
 
@@ -91,6 +91,8 @@ python scripts/agent_handoff.py --plan work/team-plan.json --reports work/runtim
 The helper only validates JSON. It detects duplicate ownership, path overlaps, cycles, scope/run mismatches, missing reports, missing evidence references, incomplete reviews, failed tests, and contradictory same-scope fact values. It does not execute report commands or verify that claimed evidence is true. See the skill's references and synthetic example assets for the input contract.
 
 Plans accept `max_workers: "auto"` by default or an integer from 1 to 20, and an optional caller-supplied `runtime_capacity`. The helper bounds plan width by 20, task count, and supplied limits. Its output records the worker ceiling and effective planning width, but neither input nor output verifies actual runtime availability. More workers can help independent substantial work; dependencies, rate limits, and coordination overhead can limit the speedup.
+
+Broad requests such as "check all my backends" now route directly to the [parallel health workflow](skills/devops-team/references/backend-health.md), without an explicit agents request. The main agent inventories once, assigns ready independent resource groups, reuses workers for remaining groups, and aggregates timestamped findings and uncovered resources. It reports missing worker/tool capacity rather than silently treating API concurrency as delegation. Small scopes stay direct; no fixed latency or token saving is promised.
 
 ## Validate
 
