@@ -51,6 +51,14 @@ class SourceSliceTests(unittest.TestCase):
     def read(self, requests=None, **kwargs):
         return reader.read_ranges(self.root, self.revision, requests or [self.request()], **kwargs)
 
+    def expand_compact(self, result):
+        expanded = json.loads(reader.encode(result))
+        self.assertEqual(expanded.pop("format"), "compact")
+        for item in expanded.get("items", []):
+            item["lines"] = [{"number": line[0], "text": line[1], "redacted": len(line) == 3 and line[2]}
+                             for line in item["lines"]]
+        return expanded
+
     def test_exact_ranges_and_immutable_source(self):
         self.write("sample.txt", "working tree changed\n")
         result = self.read([self.request(start=2, end=3), self.request("other.txt", 2, 2)])
@@ -235,6 +243,135 @@ class SourceSliceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("unrecognized arguments: --state", result.stderr)
         self.assertEqual(self.read([self.request(start=1, end=1)])["items"][0]["delivered"], [[1, 1]])
+
+    def test_compact_roundtrip_preserves_all_source_range_eof_and_error_metadata(self):
+        requests = [self.request(start=1, end=2), self.request(start=5, end=10),
+                    self.request(start=8, end=9), self.request("unicode.txt", 1, 2),
+                    self.request("missing.txt", 1, 1), self.request("empty.txt", 1, 1),
+                    self.request(".env", 1, 1), self.request("binary.bin", 1, 1),
+                    self.request("nonutf8.txt", 1, 1), {"invalid": "request"}]
+        verbose = self.read(requests)
+        compact = self.read(requests, format="compact")
+        self.assertEqual(self.read(requests, format="verbose"), verbose)
+        self.assertEqual(self.expand_compact(compact), verbose)
+        self.assertEqual(compact["items"][0]["lines"], [[1, "first"], [2, "second"], [5, "fifth"]])
+        self.assertLess(len(reader.encode(compact)), len(reader.encode(verbose)))
+
+    def test_compact_redaction_matches_verbose_including_context_outside_request(self):
+        requests = [self.request("secrets.txt", 1, 9), self.request("secret.yaml", 3, 3),
+                    self.request("secret.py", 3, 3), self.request("secret.js", 3, 3)]
+        compact = self.read(requests, format="compact")
+        self.assertEqual(self.expand_compact(compact), self.read(requests))
+        serialized = reader.encode(compact)
+        self.assertNotIn("synthetic", serialized)
+        self.assertNotIn("suffix", serialized)
+        lines = compact["items"][0]["lines"]
+        self.assertEqual([line[0] for line in lines if len(line) == 3 and line[2] is True], [2, 3, 4, 5, 7, 8])
+        self.assertEqual(lines[5], [6, "after"])
+        self.assertEqual(lines[8], [9, "tail"])
+        for item in compact["items"][1:]:
+            self.assertEqual(item["lines"], [[3, reader.common.MASK, True]])
+
+    def test_secret_assignment_expressions_mask_entire_lines_in_both_formats(self):
+        source = ('secret: process.env.SIGNING_SECRET || "FAKE_FALLBACK",\n'
+                  'password: enabled ? "FAKE_TRUE" : "FAKE_FALSE",\n'
+                  'token: process.env.API_TOKEN ||\n'
+                  '  "FAKE_CONTINUATION",\n'
+                  'const api_key = env.API_KEY ?? "FAKE_NULLISH";\n'
+                  'const endpoint = process.env.API_URL || "https://example.invalid";\n'
+                  'const enabled = mode ? "safe-a" : "safe-b";\n'
+                  'after\n')
+        self.write("expressions.js", source)
+        self.git("add", "expressions.js")
+        self.git("-c", "commit.gpgsign=false", "commit", "-qm", "synthetic secret expressions")
+        revision = self.git("rev-parse", "HEAD").strip()
+        for format in ("verbose", "compact"):
+            with self.subTest(format=format):
+                result = reader.read_ranges(self.root, revision, [self.request("expressions.js", 1, 8)], format=format)
+                self.assertNotIn("FAKE_", reader.encode(result))
+                expanded = self.expand_compact(result) if format == "compact" else result
+                self.assertEqual(expanded["status"], "complete")
+                self.assertEqual(expanded["items"][0]["lines"],
+                                 [{"number": number, "text": reader.common.MASK, "redacted": True} for number in range(1, 6)] +
+                                 [{"number": number, "text": text, "redacted": False} for number, text in enumerate(source.splitlines()[5:], 6)])
+                middle = reader.read_ranges(self.root, revision, [self.request("expressions.js", 4, 4)], format=format)
+                middle = self.expand_compact(middle) if format == "compact" else middle
+                self.assertEqual(middle["items"][0]["lines"], [{"number": 4, "text": reader.common.MASK, "redacted": True}])
+
+    def test_compact_oversized_line_estimates_match_format_and_exact_cli_budget(self):
+        for format in ("verbose", "compact"):
+            for path, text in (("large.txt", "x" * 6000), ("unicode.txt", 'a"\\\t' + "\u2603\U0001f642" * 100)):
+                with self.subTest(format=format, path=path):
+                    pending = self.read([self.request(path, 1, 2)], max_chars=1024, format=format)
+                    item = pending["items"][0]
+                    self.assertEqual(item["lines"], [])
+                    self.assertEqual(item["remaining"], [[1, 2]])
+                    pointer = item["next_line"]
+                    self.assertEqual(pointer["reason"], "oversized_line")
+                    expected_line = [1, text] if format == "compact" else {"number": 1, "text": text, "redacted": False}
+                    self.assertEqual(pointer["serialized_line_chars"], len(json.dumps(expected_line, ensure_ascii=True, separators=(",", ":"))))
+                    minimum = pointer["minimum_max_chars_for_single_line_request"]
+                    command = [sys.executable, "-B", str(Path(reader.__file__)), "--root", str(self.root),
+                               "--revision", self.revision, "--request", "-", "--format", format, "--max-chars"]
+                    request = [self.request(path, 1, 1)]
+                    for budget in (minimum - 1, minimum):
+                        result = self.read(request, max_chars=budget, format=format)
+                        cli = subprocess.run(command + [str(budget)], input=json.dumps(request).encode("utf-8"), capture_output=True)
+                        self.assertEqual(cli.stdout, reader.encode(result).encode("ascii"))
+                        self.assertLessEqual(len(cli.stdout), budget)
+                        self.assertTrue(cli.stdout.endswith(b"\n"))
+                        self.assertFalse(cli.stdout.endswith(b"\r\n"))
+                        if budget == minimum:
+                            self.assertEqual(cli.returncode, 0, cli.stderr)
+                            self.assertEqual(len(cli.stdout), minimum)
+                            self.assertEqual(result["items"][0]["lines"], [expected_line])
+                        else:
+                            self.assertEqual(cli.returncode, 1, cli.stderr)
+                            self.assertEqual(result["items"][0]["remaining"], [[1, 1]])
+
+    def test_compact_response_budget_retains_disjoint_pending_ranges(self):
+        self.write("many.txt", "".join(f"line {number} " + "x" * 120 + "\n" for number in range(1, 31)))
+        self.git("add", "many.txt")
+        self.git("-c", "commit.gpgsign=false", "commit", "-qm", "many lines")
+        revision = self.git("rev-parse", "HEAD").strip()
+        requests = [self.request("many.txt", 1, 15), self.request("many.txt", 20, 30)]
+        result = reader.read_ranges(self.root, revision, requests, 1600, format="compact")
+        item = result["items"][0]
+        self.assertEqual(result["status"], "partial")
+        self.assertTrue(item["lines"])
+        self.assertLessEqual(len(reader.encode(result)), 1600)
+        last = item["lines"][-1][0]
+        self.assertEqual(item["lines"], [[number, f"line {number} " + "x" * 120] for number in range(1, last + 1)])
+        self.assertEqual(item["delivered"], [[1, last]])
+        self.assertEqual(item["remaining"], [[last + 1, 15], [20, 30]])
+        self.assertEqual(item["next_line"]["reason"], "response_budget")
+        retry = reader.read_ranges(self.root, revision, [self.request("many.txt", start, end) for start, end in item["remaining"]], format="compact")
+        self.assertEqual(retry["status"], "complete")
+        self.assertEqual(retry["items"][0]["delivered"], item["remaining"])
+        self.assertEqual([line[0] for line in item["lines"] + retry["items"][0]["lines"]], list(range(1, 16)) + list(range(20, 31)))
+
+    def test_compact_metadata_overflow_and_global_failures_stay_explicit(self):
+        requests = [self.request("missing-" + str(index) + ".txt", 1, 1) for index in range(20)]
+        result = self.read(requests, max_chars=1024, format="compact")
+        verbose = self.read(requests, max_chars=1024)
+        self.assertEqual(result["error"], "request_metadata_exceeds_budget")
+        self.assertEqual(result["remaining"], "entire_request")
+        self.assertEqual(result["failed_items"], 20)
+        self.assertEqual(result["request_count"], 20)
+        self.assertGreater(result["required_metadata_chars"], verbose["required_metadata_chars"])
+        self.assertLessEqual(len(reader.encode(result)), 1024)
+        for revision, request in (("HEAD", [self.request()]), (self.revision, [])):
+            compact = reader.read_ranges(self.root, revision, request, format="compact")
+            verbose = reader.read_ranges(self.root, revision, request)
+            self.assertEqual(self.expand_compact(compact), verbose)
+        command = [sys.executable, "-B", str(Path(reader.__file__)), "--root", str(self.root),
+                   "--revision", self.revision, "--request", "-", "--format", "compact", "--max-chars", "1024"]
+        cli = subprocess.run(command, input=b"not json", capture_output=True)
+        self.assertEqual(cli.returncode, 2)
+        self.assertEqual(json.loads(cli.stdout), {"format": "compact", "status": "failed", "error": "invalid_or_unreadable_request_json", "remaining": "entire_request"})
+        self.assertLessEqual(len(cli.stdout), 1024)
+        with self.assertRaisesRegex(ValueError, "format must be verbose or compact"):
+            self.read(format="unknown")
 
 
 if __name__ == "__main__":

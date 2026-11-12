@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.16 — 2026-11-12
+
+- Add opt-in compact immutable-source output that removes repeated per-line labels while retaining source text, line numbers, redaction markers, identity and explicit coverage gaps. Default JSON remains compatible.
+- Consolidate shared instructions and give fresh workers scoped context; keep adaptive native parallelism, complete evidence coverage, validation and canonical findings.
+- Relay tool text once with separate status metadata, avoiding repeated JSON escaping of source and logs.
+- Mask complete recognized secret assignments, including fallback/ternary expressions, instead of exposing later operands after partial redaction.
+- Compare fresh investigations with the same source snapshots, required checks and model settings. Report measured uncached input, output, elapsed time and quality coverage; representation size alone is not a token-savings claim.
+
 ## 0.3.15 — 2026-11-12
 
 - Make continuation/recheck handling explicit: reuse verified unchanged analysis and compatible workers, refresh mutable or changed evidence, and retain requested validation and coverage.

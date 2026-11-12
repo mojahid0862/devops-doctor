@@ -2,6 +2,8 @@
 
 Requests are JSON lists of {path, start, end}, with inclusive one-based lines.
 The JSON response, including escaping and its newline, fits --max-chars.
+With --format compact, lines are [number,text] or [number,text,true] when
+redacted; absent third entries mean false. All other metadata is retained.
 Pending ranges remain explicit; increase the budget or split the next request.
 Ends beyond EOF are explicitly clamped; starts beyond EOF fail.
 No cross-process receipt is trusted as proof of delivery, so there is no state
@@ -36,6 +38,22 @@ class SourceError(Exception):
 def encode(result: dict[str, Any]) -> str:
     # ASCII encoding makes the character budget also an exact UTF-8 byte bound.
     return json.dumps(result, ensure_ascii=True, separators=(",", ":")) + "\n"
+
+
+def _format_line(line: dict[str, Any], format: str) -> dict[str, Any] | list[Any]:
+    if format == "compact":
+        return [line["number"], line["text"]] + ([True] if line["redacted"] else [])
+    return line
+
+
+def _format_result(result: dict[str, Any], format: str) -> dict[str, Any]:
+    if format != "compact":
+        return result
+    formatted = {"format": "compact", **result}
+    if "items" in result:
+        formatted["items"] = [{**item, "lines": [_format_line(line, format) for line in item["lines"]]}
+                              for item in result["items"]]
+    return formatted
 
 
 def _git(root: Path, *args: str) -> bytes:
@@ -156,8 +174,9 @@ def _safe_lines(raw: str) -> list[dict[str, Any]]:
                 close = raw.find(delimiter, close + len(delimiter))
             final = len(raw) - 1 if close < 0 else close + len(delimiter) - 1
             last = max(last, bisect.bisect_right(starts, final) - 1)
-        if last > first or delimiter:
-            masked.update(range(first, last + 1))
+        # A secret value can be an expression with quoted fallback branches.
+        # Mask the entire assignment and its continuations, not one operand.
+        masked.update(range(first, last + 1))
     result = []
     for index, line in enumerate(original):
         line = line.removesuffix("\r")
@@ -203,7 +222,7 @@ def _status(result: dict[str, Any]) -> None:
         result["status"] = "partial"
 
 
-def _pointer(item: dict[str, Any], available: list[dict[str, Any]], source: dict[str, str], budget: int) -> None:
+def _pointer(item: dict[str, Any], available: list[dict[str, Any]], source: dict[str, str], budget: int, format: str) -> None:
     item.pop("next_line", None)
     for start, end in item["remaining"]:
         if start <= len(available):
@@ -211,23 +230,26 @@ def _pointer(item: dict[str, Any], available: list[dict[str, Any]], source: dict
             single = {"path": item["path"], "blob_sha": item["blob_sha"], "requested": [[start, start]],
                       "effective": [[start, start]], "source_line_count": len(available),
                       "delivered": [[start, start]], "remaining": [], "lines": [line], "status": "complete"}
-            minimum = max(MIN_BUDGET, len(encode({"status": "complete", "source": source, "items": [single]})))
-            item["next_line"] = {"number": start, "serialized_line_chars": len(encode(line)) - 1,
+            minimum = max(MIN_BUDGET, len(encode(_format_result({"status": "complete", "source": source, "items": [single]}, format))))
+            line_chars = len(json.dumps(_format_line(line, format), ensure_ascii=True, separators=(",", ":")))
+            item["next_line"] = {"number": start, "serialized_line_chars": line_chars,
                                  "minimum_max_chars_for_single_line_request": minimum,
                                  "reason": "oversized_line" if minimum > budget else "response_budget"}
             break
 
 
-def read_ranges(root: str | Path, revision: str, requests: Any, max_chars: int = 12000) -> dict[str, Any]:
+def read_ranges(root: str | Path, revision: str, requests: Any, max_chars: int = 12000, *, format: str = "verbose") -> dict[str, Any]:
     """Return complete lines only, with explicit unsatisfied ranges and errors."""
     if type(max_chars) is not int or max_chars < MIN_BUDGET:
         raise ValueError("max_chars must be an integer at least 1024")
+    if format not in ("verbose", "compact"):
+        raise ValueError("format must be verbose or compact")
     if not isinstance(requests, list) or not requests:
-        return {"status": "failed", "error": "request_requires_nonempty_json_list", "remaining": "entire_request"}
+        return _format_result({"status": "failed", "error": "request_requires_nonempty_json_list", "remaining": "entire_request"}, format)
     try:
         resolved, revision = _identity(root, revision)
     except SourceError as exc:
-        return {"status": "failed", "error": str(exc), "remaining": "entire_request"}
+        return _format_result({"status": "failed", "error": str(exc), "remaining": "entire_request"}, format)
     result: dict[str, Any] = {"status": "partial", "source": {"root": common.redact(str(resolved)), "revision": revision}, "items": []}
     grouped: dict[str, dict[str, Any]] = {}
     for index, request in enumerate(requests):
@@ -263,15 +285,15 @@ def read_ranges(root: str | Path, revision: str, requests: Any, max_chars: int =
             item["error"] = str(exc) if isinstance(exc, SourceError) else "invalid_git_object_response"
         _refresh(item)
         if path in available:
-            _pointer(item, available[path], result["source"], max_chars)
+            _pointer(item, available[path], result["source"], max_chars, format)
     _status(result)
     # Never hide failed/pending items to make room for source. If the metadata
     # itself cannot fit, deliver nothing and identify the entire original batch.
-    needed = len(encode(result))
+    needed = len(encode(_format_result(result, format)))
     if needed > max_chars:
-        return {"status": "failed", "error": "request_metadata_exceeds_budget", "remaining": "entire_request",
+        return _format_result({"status": "failed", "error": "request_metadata_exceeds_budget", "remaining": "entire_request",
                 "required_metadata_chars": needed, "request_count": len(requests),
-                "failed_items": sum(item["status"] == "failed" for item in result["items"])}
+                "failed_items": sum(item["status"] == "failed" for item in result["items"])}, format)
     for path, item in grouped.items():
         lines = available.get(path)
         if lines is None:
@@ -281,18 +303,18 @@ def read_ranges(root: str | Path, revision: str, requests: Any, max_chars: int =
             for number in range(start, min(end, len(lines)) + 1):
                 item["lines"].append(lines[number - 1])
                 _refresh(item)
-                _pointer(item, lines, result["source"], max_chars)
+                _pointer(item, lines, result["source"], max_chars, format)
                 _status(result)
-                if len(encode(result)) > max_chars:
+                if len(encode(_format_result(result, format))) > max_chars:
                     item["lines"].pop()
                     _refresh(item)
-                    _pointer(item, lines, result["source"], max_chars)
+                    _pointer(item, lines, result["source"], max_chars, format)
                     _status(result)
                     stopped = True
                     break
             if stopped:
                 break
-    return result
+    return _format_result(result, format)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -301,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--revision", required=True, help="Full immutable 40- or 64-hex commit hash")
     parser.add_argument("--request", required=True, help="JSON request file, or - to read JSON from stdin")
     parser.add_argument("--max-chars", type=int, default=12000, help="Entire JSON response budget (minimum 1024)")
+    parser.add_argument("--format", choices=("verbose", "compact"), default="verbose", help="Line objects (default) or compact [number,text,true-if-redacted] arrays")
     args = parser.parse_args(argv)
     if args.max_chars < MIN_BUDGET:
         parser.error("--max-chars must be at least 1024")
@@ -313,9 +336,9 @@ def main(argv: list[str] | None = None) -> int:
         if len(data) > MAX_REQUEST_BYTES:
             raise SourceError("request_exceeds_256KiB_split_batch")
         requests = json.loads(data)
-        result = read_ranges(args.root, args.revision, requests, args.max_chars)
+        result = read_ranges(args.root, args.revision, requests, args.max_chars, format=args.format)
     except (OSError, ValueError, RecursionError, SourceError) as exc:
-        result = {"status": "failed", "error": str(exc) if isinstance(exc, SourceError) else "invalid_or_unreadable_request_json", "remaining": "entire_request"}
+        result = _format_result({"status": "failed", "error": str(exc) if isinstance(exc, SourceError) else "invalid_or_unreadable_request_json", "remaining": "entire_request"}, args.format)
     # Bypass Windows text newline translation: the final LF is budgeted once.
     sys.stdout.buffer.write(encode(result).encode("ascii"))
     return {"complete": 0, "partial": 1, "failed": 2}[result["status"]]
