@@ -1,4 +1,4 @@
-# DevOps Doctor 0.3.18
+# DevOps Doctor 0.3.19
 
 DevOps Doctor is a Codex plugin for fast, read-only DevOps/SRE work across GitLab CI/CD, AWS stack health, Terraform, Docker, Kubernetes, web/mobile apps, cost review, security drift, observability, and rollback planning.
 

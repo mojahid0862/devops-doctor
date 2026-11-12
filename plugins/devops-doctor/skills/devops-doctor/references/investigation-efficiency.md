@@ -14,15 +14,19 @@ Use these mechanics for long investigations, ad hoc CLI reads, or clipped eviden
 
 ## Pinned-source reader
 
-For large or batched pinned-source reads, use the bundled [source_slice.py](../../../scripts/source_slice.py) after locating ranges. Resolve `<plugin-root>` from the installed skill location, preserve the repository cwd, and pass an absolute checkout root and request-file path:
+For large or batched pinned-source reads, invoke the bundled [source_slice.py](../../../scripts/source_slice.py) CLI after locating ranges. Resolve `<plugin-root>` from the installed skill location and preserve the repository cwd. For model/human reads, use direct numbered text and repeat inline ranges instead of writing request files or importing the helper to reformat JSON:
 
 ```powershell
-python -B "<plugin-root>/scripts/source_slice.py" --root "<checkout-root>" --revision <full-commit-SHA> --request "<request.json>" --max-chars 12000
+python -B "<plugin-root>/scripts/source_slice.py" --root "<checkout-root>" --revision <full-commit-SHA> --range 'src/handler.py:10:40' --range 'src/guards.py:1:60' --format text --max-bytes 12000
 ```
 
-The request file is a JSON list, for example `[{"path":"src/handler.py","start":10,"end":40}]`, with repository-relative paths and inclusive line numbers. The response identifies the revision/blob and requested, delivered and remaining ranges; overlapping ranges within that response are deduplicated. Follow remaining ranges and any newly required context until the question's coverage is complete. `--max-chars` limits one response, not the investigation; increase it when a necessary complete line cannot fit, or split ranges without losing required context. A `complete` response means delivery completed, not that the review or provenance is established. Errors, redactions and undelivered ranges remain visible gaps to resolve safely when needed. Keep delivered-range pointers in the canonical result or existing task notes; the helper provides no cross-run reuse ledger.
+Ranges use repository-relative paths and inclusive line numbers. `--request <file>` or `--request -` still accepts a JSON list such as `[{"path":"src/handler.py","start":10,"end":40}]`; it is mutually exclusive with inline ranges. Use literal/structured argument handling for unusual filenames, without shell interpolation. Default verbose JSON and opt-in compact JSON remain compatible for machine consumers.
 
-Optional `--format compact` emits `[number,text]` or `[number,text,true]` for redacted lines, with unchanged identity, errors and coverage metadata. The default verbose JSON remains compatible. Use it only when the consumer accepts this representation; fewer repeated labels do not establish lower model tokens or elapsed time. All coverage and redaction-gap rules above still apply.
+Text packets start with `SOURCE_SLICE_TEXT_V1`, retain complete RESULT/ITEM metadata and end with `END`. A row is a line number followed by one tab and sanitized source; suffix `R` marks redaction, `J` means the following text is a JSON string for control-safe escaping, and `RJ` means both. Split only the first tab; ordinary quotes, backslashes and whitespace remain source text. In `functions.exec`, relay the tool's text once rather than JSON-encoding the entire result again: `const {output, ...metadata} = await tools.exec_command(args); text(metadata); text(output);`. Keep all status, stderr, session and truncation information, including rejected parallel calls.
+
+Use `--help` for the documented interface. Read or modify the helper implementation only when debugging or changing the helper; do not rediscover its API in every source-review worker. Select only assigned identities/fields from task maps instead of dumping every repository/resource index into each worker.
+
+The response identifies revision/blob and requested, delivered and remaining ranges; overlapping ranges within one response are deduplicated. Follow remaining ranges and newly required context until coverage is complete. `--max-bytes` (legacy alias `--max-chars`) bounds one UTF-8 response including framing, not the investigation. Increase it for a necessary complete line or split ranges without losing context, and allow enough outer tool output for the packet. A missing END marker or any host truncation warning leaves text delivery incomplete. `complete` means delivery, not review/provenance completion. Preserve and resolve required errors, redactions and undelivered ranges. Keep read-range pointers in canonical results/existing notes; there is no cross-run reuse ledger.
 
 ## Concise reporting without lost meaning
 

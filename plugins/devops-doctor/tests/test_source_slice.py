@@ -4,7 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -57,6 +57,37 @@ class SourceSliceTests(unittest.TestCase):
         for item in expanded.get("items", []):
             item["lines"] = [{"number": line[0], "text": line[1], "redacted": len(line) == 3 and line[2]}
                              for line in item["lines"]]
+        return expanded
+
+    def expand_text(self, result):
+        wire = result if isinstance(result, bytes) else reader.encode_bytes(result)
+        records = wire.decode("utf-8").split("\n")
+        self.assertEqual(records.pop(), "")
+        self.assertEqual(records.pop(), "END")
+        self.assertEqual(records.pop(0), "SOURCE_SLICE_TEXT_V1")
+        self.assertTrue(records[0].startswith("RESULT "))
+        expanded = json.loads(records.pop(0)[7:])
+        self.assertEqual(expanded.pop("format"), "text")
+        item = None
+        for record in records:
+            if record.startswith("ITEM "):
+                item = json.loads(record[5:])
+                item["lines"] = []
+                expanded["items"].append(item)
+                continue
+            self.assertIsNotNone(item)
+            prefix, payload = record.split("\t", 1)
+            number = prefix.rstrip("RJ")
+            flags = prefix[len(number):]
+            self.assertIn(flags, ("", "R", "J", "RJ"))
+            text = json.loads(payload) if "J" in flags else payload
+            self.assertIsInstance(text, str)
+            item["lines"].append({"number": int(number), "text": text, "redacted": "R" in flags})
+        for item in expanded.get("items", []):
+            numbers = [line["number"] for line in item["lines"]]
+            self.assertEqual(numbers, sorted(set(numbers)))
+            if "delivered" in item:
+                self.assertEqual(reader.merge_ranges([[number, number] for number in numbers]), item["delivered"])
         return expanded
 
     def test_exact_ranges_and_immutable_source(self):
@@ -272,7 +303,7 @@ class SourceSliceTests(unittest.TestCase):
         for item in compact["items"][1:]:
             self.assertEqual(item["lines"], [[3, reader.common.MASK, True]])
 
-    def test_secret_assignment_expressions_mask_entire_lines_in_both_formats(self):
+    def test_secret_assignment_expressions_mask_entire_lines_in_all_formats(self):
         source = ('secret: process.env.SIGNING_SECRET || "FAKE_FALLBACK",\n'
                   'password: enabled ? "FAKE_TRUE" : "FAKE_FALSE",\n'
                   'token: process.env.API_TOKEN ||\n'
@@ -285,17 +316,17 @@ class SourceSliceTests(unittest.TestCase):
         self.git("add", "expressions.js")
         self.git("-c", "commit.gpgsign=false", "commit", "-qm", "synthetic secret expressions")
         revision = self.git("rev-parse", "HEAD").strip()
-        for format in ("verbose", "compact"):
+        for format in ("verbose", "compact", "text"):
             with self.subTest(format=format):
                 result = reader.read_ranges(self.root, revision, [self.request("expressions.js", 1, 8)], format=format)
                 self.assertNotIn("FAKE_", reader.encode(result))
-                expanded = self.expand_compact(result) if format == "compact" else result
+                expanded = self.expand_compact(result) if format == "compact" else self.expand_text(result) if format == "text" else result
                 self.assertEqual(expanded["status"], "complete")
                 self.assertEqual(expanded["items"][0]["lines"],
                                  [{"number": number, "text": reader.common.MASK, "redacted": True} for number in range(1, 6)] +
                                  [{"number": number, "text": text, "redacted": False} for number, text in enumerate(source.splitlines()[5:], 6)])
                 middle = reader.read_ranges(self.root, revision, [self.request("expressions.js", 4, 4)], format=format)
-                middle = self.expand_compact(middle) if format == "compact" else middle
+                middle = self.expand_compact(middle) if format == "compact" else self.expand_text(middle) if format == "text" else middle
                 self.assertEqual(middle["items"][0]["lines"], [{"number": 4, "text": reader.common.MASK, "redacted": True}])
 
     def test_compact_oversized_line_estimates_match_format_and_exact_cli_budget(self):
@@ -372,6 +403,213 @@ class SourceSliceTests(unittest.TestCase):
         self.assertLessEqual(len(cli.stdout), 1024)
         with self.assertRaisesRegex(ValueError, "format must be verbose or compact"):
             self.read(format="unknown")
+
+    def test_text_roundtrip_preserves_identity_source_metadata_and_redaction(self):
+        requests = [self.request(start=1, end=2), self.request(start=5, end=10),
+                    self.request(start=8, end=9), self.request("unicode.txt", 1, 2),
+                    self.request("missing.txt", 1, 1), self.request("empty.txt", 1, 1),
+                    self.request(".env", 1, 1), self.request("binary.bin", 1, 1),
+                    self.request("nonutf8.txt", 1, 1), {"invalid": "request"},
+                    self.request("secrets.txt", 1, 9), self.request("secret.yaml", 3, 3),
+                    self.request("secret.py", 3, 3), self.request("secret.js", 3, 3)]
+        result = self.read(requests, max_chars=20000, format="text")
+        self.assertEqual(self.expand_text(result), self.read(requests, max_chars=20000))
+        self.assertNotIn(b"synthetic", reader.encode_bytes(result))
+        self.assertNotIn(b"suffix", reader.encode_bytes(result))
+
+    def test_text_preserves_literal_whitespace_and_escapes_controls_without_record_spoofing(self):
+        source = ['const message = "hello"; // \\path', "\t  spaced\ttext  ", "", "END",
+                  'ITEM {"status":"complete"}', "SOURCE_SLICE_TEXT_V1", "RESULT {}",
+                  "ordinary \u2603\U0001f642", "escape\x1b[2Jbody", "back\bspace\rreturn",
+                  "control\x01\x7f\x85end", "bidi\u202evalue\u2066end", "separator\u2028\u2029end"]
+        self.write("controls.txt", "\n".join(source) + "\n")
+        self.git("add", "controls.txt")
+        self.git("-c", "commit.gpgsign=false", "commit", "-qm", "text framing fixture")
+        revision = self.git("rev-parse", "HEAD").strip()
+        request = [self.request("controls.txt", 1, len(source))]
+        text = reader.read_ranges(self.root, revision, request, format="text")
+        wire = reader.encode_bytes(text)
+        self.assertEqual(self.expand_text(wire), reader.read_ranges(self.root, revision, request))
+        self.assertEqual([line["text"] for line in text["items"][0]["lines"]], source)
+        self.assertIn(('1\t' + source[0] + "\n").encode("utf-8"), wire)
+        self.assertIn(b"2\t\t  spaced\ttext  \n3\t\n4\tEND\n", wire)
+        for number in range(9, len(source) + 1):
+            self.assertIn(f"{number}J\t".encode("ascii"), wire)
+        for control in (b"\x1b", b"\b", b"\r", b"\x01", b"\x7f", "\u202e".encode("utf-8")):
+            self.assertNotIn(control, wire)
+        with self.assertRaises(AssertionError):
+            self.expand_text(wire.removesuffix(b"END\n"))
+
+    def test_text_retry_estimates_and_cli_budget_measure_exact_utf8_bytes(self):
+        controls = "\x1b" * 300 + "\u2603" * 20
+        self.write("control-large.txt", controls + "\n")
+        self.git("add", "control-large.txt")
+        self.git("-c", "commit.gpgsign=false", "commit", "-qm", "large escaped line fixture")
+        self.revision = self.git("rev-parse", "HEAD").strip()
+        for path, value, encoding in (("large.txt", "x" * 6000, "T"),
+                                      ("unicode.txt", 'a"\\\t' + "\u2603\U0001f642" * 100, "T"),
+                                      ("control-large.txt", controls, "J")):
+            with self.subTest(path=path):
+                pending = self.read([self.request(path, 1, 2)], max_chars=1024, format="text")
+                pointer = pending["items"][0]["next_line"]
+                self.assertEqual(pointer["reason"], "oversized_line")
+                payload = json.dumps(value, ensure_ascii=True) if encoding == "J" else value
+                prefix = "1J" if encoding == "J" else "1"
+                self.assertEqual(pointer["serialized_line_chars"], len(f"{prefix}\t{payload}".encode("utf-8")))
+                minimum = pointer["minimum_max_chars_for_single_line_request"]
+                command = [sys.executable, "-B", str(Path(reader.__file__)), "--root", str(self.root),
+                           "--revision", self.revision, "--range", path + ":1:1", "--format", "text", "--max-bytes"]
+                for budget in (minimum - 1, minimum):
+                    result = self.read([self.request(path, 1, 1)], max_chars=budget, format="text")
+                    cli = subprocess.run(command + [str(budget)], capture_output=True)
+                    self.assertEqual(cli.stdout, reader.encode_bytes(result))
+                    self.assertLessEqual(len(cli.stdout), budget)
+                    self.assertTrue(cli.stdout.endswith(b"END\n"))
+                    self.assertNotIn(b"\r\n", cli.stdout)
+                    decoded = self.expand_text(cli.stdout)
+                    self.assertEqual(cli.returncode, 0 if budget == minimum else 1, cli.stderr)
+                    if budget == minimum:
+                        self.assertEqual(len(cli.stdout), minimum)
+                        self.assertEqual(decoded["items"][0]["lines"], [{"number": 1, "text": value, "redacted": False}])
+                    else:
+                        self.assertEqual(decoded["items"][0]["remaining"], [[1, 1]])
+                if path == "unicode.txt":
+                    self.assertGreater(len(cli.stdout), len(cli.stdout.decode("utf-8")))
+
+    def test_text_budget_preserves_disjoint_pending_ranges_and_failed_items(self):
+        self.write("many.txt", "".join(f"line {number} " + "x" * 120 + "\n" for number in range(1, 31)))
+        self.git("add", "many.txt")
+        self.git("-c", "commit.gpgsign=false", "commit", "-qm", "many text lines")
+        revision = self.git("rev-parse", "HEAD").strip()
+        requests = [self.request("many.txt", 1, 15), self.request("many.txt", 20, 30), self.request("missing.txt", 1, 1)]
+        result = reader.read_ranges(self.root, revision, requests, 1900, format="text")
+        decoded = self.expand_text(result)
+        item = decoded["items"][0]
+        self.assertEqual(decoded["status"], "partial")
+        self.assertEqual(decoded["items"][1]["status"], "failed")
+        self.assertTrue(item["lines"])
+        self.assertLessEqual(len(reader.encode_bytes(result)), 1900)
+        last = item["lines"][-1]["number"]
+        self.assertEqual(item["remaining"], [[last + 1, 15], [20, 30]])
+        retry = reader.read_ranges(self.root, revision, [self.request("many.txt", start, end) for start, end in item["remaining"]], format="text")
+        self.assertEqual(retry["status"], "complete")
+        self.assertEqual(retry["items"][0]["delivered"], item["remaining"])
+        self.assertEqual([line["number"] for line in item["lines"] + self.expand_text(retry)["items"][0]["lines"]],
+                         list(range(1, 16)) + list(range(20, 31)))
+
+    def test_text_global_failures_and_metadata_overflow_remain_bounded(self):
+        requests = [self.request("missing-" + str(index) + ".txt", 1, 1) for index in range(20)]
+        result = self.read(requests, max_chars=1024, format="text")
+        decoded = self.expand_text(result)
+        self.assertEqual(decoded["error"], "request_metadata_exceeds_budget")
+        self.assertEqual(decoded["remaining"], "entire_request")
+        self.assertEqual(decoded["failed_items"], 20)
+        self.assertEqual(decoded["request_count"], 20)
+        self.assertGreater(decoded["required_metadata_chars"], 1024)
+        self.assertLessEqual(len(reader.encode_bytes(result)), 1024)
+        for revision, request in (("HEAD", [self.request()]), (self.revision, [])):
+            text = reader.read_ranges(self.root, revision, request, format="text")
+            self.assertEqual(self.expand_text(text), reader.read_ranges(self.root, revision, request))
+        command = [sys.executable, "-B", str(Path(reader.__file__)), "--root", str(self.root),
+                   "--revision", self.revision, "--request", "-", "--format", "text", "--max-bytes", "1024"]
+        cli = subprocess.run(command, input=b"not json", capture_output=True)
+        self.assertEqual(cli.returncode, 2)
+        self.assertEqual(self.expand_text(cli.stdout), {"status": "failed", "error": "invalid_or_unreadable_request_json", "remaining": "entire_request"})
+        self.assertLessEqual(len(cli.stdout), 1024)
+
+    def test_inline_stdin_and_file_requests_have_identical_cli_results(self):
+        self.write("folder/snow \u2603.txt", "snow\n")
+        self.git("add", "folder")
+        self.git("-c", "commit.gpgsign=false", "commit", "-qm", "inline path fixture")
+        revision = self.git("rev-parse", "HEAD").strip()
+        requests = [self.request(start=1, end=2), self.request(start=2, end=3),
+                    self.request(start=5, end=9), self.request("folder/snow \u2603.txt", 1, 1)]
+        data = json.dumps(requests).encode("utf-8")
+        self.write("request.json", data)
+        for format in ("verbose", "compact", "text"):
+            with self.subTest(format=format):
+                command = [sys.executable, "-B", str(Path(reader.__file__)), "--root", str(self.root),
+                           "--revision", revision, "--format", format]
+                stdin = subprocess.run(command + ["--request", "-"], input=data, capture_output=True)
+                file = subprocess.run(command + ["--request", str(self.root / "request.json")], capture_output=True)
+                arguments = [arg for request in requests for arg in ("--range", f'{request["path"]}:{request["start"]}:{request["end"]}')]
+                inline = subprocess.run(command + arguments, capture_output=True)
+                self.assertEqual(stdin.returncode, 0, stdin.stderr)
+                self.assertEqual(file.returncode, 0, file.stderr)
+                self.assertEqual(inline.returncode, 0, inline.stderr)
+                self.assertEqual(stdin.stdout, file.stdout)
+                self.assertEqual(inline.stdout, file.stdout)
+                expected = reader.read_ranges(self.root, revision, requests, format=format)
+                self.assertEqual(inline.stdout, reader.encode_bytes(expected))
+
+    def test_inline_invalid_syntax_paths_ranges_and_argument_exclusivity(self):
+        command = [sys.executable, "-B", str(Path(reader.__file__)), "--root", str(self.root),
+                   "--revision", self.revision, "--format", "text"]
+        for value in ("synthetic-private-input", "sample.txt:1", "sample.txt:one:2", "sample.txt:-1:2",
+                      "sample.txt:1:99999999999", "sample.txt:\u0661:2"):
+            with self.subTest(value=value):
+                cli = subprocess.run(command + ["--range", "sample.txt:1:1", "--range", value], capture_output=True)
+                self.assertEqual(cli.returncode, 2, cli.stderr)
+                decoded = self.expand_text(cli.stdout)
+                self.assertEqual(decoded["status"], "failed")
+                self.assertEqual(decoded["remaining"], "entire_request")
+                self.assertNotIn("items", decoded)
+                self.assertNotIn(b"synthetic", cli.stdout + cli.stderr)
+        for value, error in (("sample.txt:0:2", "invalid_inclusive_line_range"),
+                             ("sample.txt:2:1", "invalid_inclusive_line_range"),
+                             ("sample.txt:1:2147483648", "invalid_inclusive_line_range"),
+                             ("../sample.txt:1:1", "invalid_relative_path"),
+                             ("sample.txt:1:2:3", "invalid_relative_path"),
+                             (":1:1", "invalid_relative_path"),
+                             (".env:1:1", "credential_file_not_read")):
+            with self.subTest(value=value):
+                cli = subprocess.run(command + ["--range", value], capture_output=True)
+                self.assertEqual(cli.returncode, 2, cli.stderr)
+                self.assertEqual(self.expand_text(cli.stdout)["items"][0]["error"], error)
+        for arguments in ([], ["--range", "sample.txt:1:1", "--request", "-"]):
+            cli = subprocess.run(command + arguments, input=b"[]", capture_output=True)
+            self.assertEqual(cli.returncode, 2)
+            self.assertEqual(cli.stdout, b"")
+
+    def test_inline_request_size_limit_applies_to_complete_normalized_batch(self):
+        values = ["folder/\u2603 one.txt:1:2", "other.txt:3:4"]
+        expected = [self.request("folder/\u2603 one.txt", 1, 2), self.request("other.txt", 3, 4)]
+        size = len(json.dumps(expected, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        with patch.object(reader, "MAX_REQUEST_BYTES", size):
+            self.assertEqual(reader._inline_requests(values), expected)
+        with patch.object(reader, "MAX_REQUEST_BYTES", size - 1):
+            with self.assertRaisesRegex(reader.SourceError, "request_exceeds_256KiB_split_batch"):
+                reader._inline_requests(values)
+        with self.assertRaisesRegex(reader.SourceError, "request_exceeds_256KiB_split_batch"):
+            reader._inline_requests(["x" * reader.MAX_REQUEST_BYTES + ":1:1"])
+
+    def test_single_line_retry_minimum_includes_initial_pending_metadata_in_all_formats(self):
+        # Keep metadata byte counts identical on Windows and Linux test hosts.
+        root = PureWindowsPath("C:/synthetic-review-repository")
+        path = "/".join(["x" * 100] * 5 + ["x" * 19])
+        self.assertEqual(len(path), 524)
+        lines = [{"number": number, "text": "x" * 50, "redacted": False} for number in (1, 2)]
+        requests = [self.request(path, 1, 2), self.request("other.txt", 1, 1)]
+        with patch.object(reader, "_identity", return_value=(root, self.revision)), \
+                patch.object(reader, "_blob", return_value=("b" * 40, lines)):
+            for format in ("verbose", "compact", "text"):
+                with self.subTest(format=format):
+                    budget = 1400 if format == "text" else 1380
+                    batch = reader.read_ranges(root, self.revision, requests, budget, format=format)
+                    self.assertEqual(batch["status"], "partial")
+                    pointer = batch["items"][0]["next_line"]
+                    minimum = pointer["minimum_max_chars_for_single_line_request"]
+                    retry_request = [self.request(path, pointer["number"], pointer["number"])]
+                    retry = reader.read_ranges(root, self.revision, retry_request, minimum, format=format)
+                    self.assertEqual(retry["status"], "complete")
+                    self.assertLessEqual(len(reader.encode_bytes(retry)), minimum)
+                    expanded = self.expand_compact(retry) if format == "compact" else self.expand_text(retry) if format == "text" else retry
+                    self.assertEqual(expanded["items"][0]["lines"], [lines[pointer["number"] - 1]])
+                    if format == "text":
+                        self.assertEqual(minimum, 1025)
+                        too_small = reader.read_ranges(root, self.revision, retry_request, minimum - 1, format=format)
+                        self.assertEqual(too_small["error"], "request_metadata_exceeds_budget")
+                        self.assertEqual(too_small["required_metadata_chars"], minimum)
 
 
 if __name__ == "__main__":

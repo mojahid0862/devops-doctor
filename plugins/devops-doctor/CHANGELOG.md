@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.19 - 2026-11-12
+
+- Add direct numbered source packets and inline range arguments to remove repeated request-file and JSON-rendering wrappers. Keep all identity, redaction, error and coverage metadata.
+- Preserve default/compact JSON, immutable offline Git reads and complete-line delivery. Text packets have control-safe encoding and exact UTF-8 byte budgets/retry estimates.
+- Route source readers through the documented CLI/help instead of repeated helper-code inspection. Preserve adaptive parallelism, the selected model and full evidence/validation requirements.
+
 ## 0.3.18 - 2026-11-12
 
 - Retain the stable 0.3.15 task/agent policy after matched fresh-task candidates failed the combined uncached-input, output and elapsed-time target. Adaptive native delegation up to 20 concurrent descendants remains available.

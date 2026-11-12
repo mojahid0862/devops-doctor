@@ -1,9 +1,14 @@
 """Bounded, redacted line ranges from immutable local Git objects.
 
-Requests are JSON lists of {path, start, end}, with inclusive one-based lines.
-The JSON response, including escaping and its newline, fits --max-chars.
+Requests are JSON lists of {path, start, end}, or repeated --range path:start:end,
+with inclusive one-based lines. The entire response fits --max-bytes (the
+compatible --max-chars name and *_chars diagnostics also count UTF-8 bytes).
 With --format compact, lines are [number,text] or [number,text,true] when
 redacted; absent third entries mean false. All other metadata is retained.
+With --format text, SOURCE_SLICE_TEXT_V1 and END frame RESULT/ITEM JSON
+metadata and source rows. Prefix N is the line number, NR marks redaction,
+NJ marks a JSON string for control-safe escaping, and NRJ marks both.
+Unflagged rows contain literal sanitized text. Split only the first tab.
 Pending ranges remain explicit; increase the budget or split the next request.
 Ends beyond EOF are explicitly clamped; starts beyond EOF fail.
 No cross-process receipt is trusted as proof of delivery, so there is no state
@@ -20,6 +25,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -36,8 +42,30 @@ class SourceError(Exception):
 
 
 def encode(result: dict[str, Any]) -> str:
-    # ASCII encoding makes the character budget also an exact UTF-8 byte bound.
+    if result.get("format") == "text":
+        metadata = {key: value for key, value in result.items() if key != "items"}
+        # Preserve whether items existed even for an empty list/global failure.
+        if "items" in result:
+            metadata["items"] = []
+        records = ["SOURCE_SLICE_TEXT_V1", "RESULT " + json.dumps(metadata, ensure_ascii=True, separators=(",", ":"))]
+        for item in result.get("items", []):
+            records.append("ITEM " + json.dumps({key: value for key, value in item.items() if key != "lines"},
+                                               ensure_ascii=True, separators=(",", ":")))
+            records.extend(_text_line(line) for line in item["lines"])
+        return "\n".join([*records, "END", ""])
     return json.dumps(result, ensure_ascii=True, separators=(",", ":")) + "\n"
+
+
+def _text_line(line: dict[str, Any]) -> str:
+    text = line["text"]
+    escaped = any(char != "\t" and unicodedata.category(char) in {"Cc", "Cf", "Zl", "Zp"} for char in text)
+    payload = json.dumps(text, ensure_ascii=True) if escaped else text
+    return f'{line["number"]}{"R" if line["redacted"] else ""}{"J" if escaped else ""}\t{payload}'
+
+
+def encode_bytes(result: dict[str, Any]) -> bytes:
+    """Serialize exactly the bytes written to stdout, including the final LF."""
+    return encode(result).encode("utf-8")
 
 
 def _format_line(line: dict[str, Any], format: str) -> dict[str, Any] | list[Any]:
@@ -47,10 +75,10 @@ def _format_line(line: dict[str, Any], format: str) -> dict[str, Any] | list[Any
 
 
 def _format_result(result: dict[str, Any], format: str) -> dict[str, Any]:
-    if format != "compact":
+    if format == "verbose":
         return result
-    formatted = {"format": "compact", **result}
-    if "items" in result:
+    formatted = {"format": format, **result}
+    if format == "compact" and "items" in result:
         formatted["items"] = [{**item, "lines": [_format_line(line, format) for line in item["lines"]]}
                               for item in result["items"]]
     return formatted
@@ -230,11 +258,22 @@ def _pointer(item: dict[str, Any], available: list[dict[str, Any]], source: dict
             single = {"path": item["path"], "blob_sha": item["blob_sha"], "requested": [[start, start]],
                       "effective": [[start, start]], "source_line_count": len(available),
                       "delivered": [[start, start]], "remaining": [], "lines": [line], "status": "complete"}
-            minimum = max(MIN_BUDGET, len(encode(_format_result({"status": "complete", "source": source, "items": [single]}, format))))
-            line_chars = len(json.dumps(_format_line(line, format), ensure_ascii=True, separators=(",", ":")))
-            item["next_line"] = {"number": start, "serialized_line_chars": line_chars,
-                                 "minimum_max_chars_for_single_line_request": minimum,
-                                 "reason": "oversized_line" if minimum > budget else "response_budget"}
+            minimum = max(MIN_BUDGET, len(encode_bytes(_format_result({"status": "complete", "source": source, "items": [single]}, format))))
+            reason = "oversized_line" if minimum > budget else "response_budget"
+            line_chars = len(_text_line(line).encode("utf-8")) if format == "text" else len(json.dumps(_format_line(line, format), ensure_ascii=True, separators=(",", ":")))
+            pointer = {"number": start, "serialized_line_chars": line_chars,
+                       "minimum_max_chars_for_single_line_request": minimum, "reason": "response_budget"}
+            pending = {**single, "delivered": [], "remaining": [[start, start]], "lines": [],
+                       "status": "partial", "next_line": pointer}
+            # A retry must first fit its pending metadata, which can exceed the
+            # completed packet. Include the pointer's own changing digit count.
+            while True:
+                needed = len(encode_bytes(_format_result({"status": "partial", "source": source, "items": [pending]}, format)))
+                if needed <= minimum:
+                    break
+                minimum = needed
+                pointer["minimum_max_chars_for_single_line_request"] = minimum
+            item["next_line"] = {**pointer, "reason": reason}
             break
 
 
@@ -242,8 +281,8 @@ def read_ranges(root: str | Path, revision: str, requests: Any, max_chars: int =
     """Return complete lines only, with explicit unsatisfied ranges and errors."""
     if type(max_chars) is not int or max_chars < MIN_BUDGET:
         raise ValueError("max_chars must be an integer at least 1024")
-    if format not in ("verbose", "compact"):
-        raise ValueError("format must be verbose or compact")
+    if format not in ("verbose", "compact", "text"):
+        raise ValueError("format must be verbose or compact or text")
     if not isinstance(requests, list) or not requests:
         return _format_result({"status": "failed", "error": "request_requires_nonempty_json_list", "remaining": "entire_request"}, format)
     try:
@@ -289,7 +328,7 @@ def read_ranges(root: str | Path, revision: str, requests: Any, max_chars: int =
     _status(result)
     # Never hide failed/pending items to make room for source. If the metadata
     # itself cannot fit, deliver nothing and identify the entire original batch.
-    needed = len(encode(_format_result(result, format)))
+    needed = len(encode_bytes(_format_result(result, format)))
     if needed > max_chars:
         return _format_result({"status": "failed", "error": "request_metadata_exceeds_budget", "remaining": "entire_request",
                 "required_metadata_chars": needed, "request_count": len(requests),
@@ -305,7 +344,7 @@ def read_ranges(root: str | Path, revision: str, requests: Any, max_chars: int =
                 _refresh(item)
                 _pointer(item, lines, result["source"], max_chars, format)
                 _status(result)
-                if len(encode(_format_result(result, format))) > max_chars:
+                if len(encode_bytes(_format_result(result, format))) > max_chars:
                     item["lines"].pop()
                     _refresh(item)
                     _pointer(item, lines, result["source"], max_chars, format)
@@ -317,30 +356,51 @@ def read_ranges(root: str | Path, revision: str, requests: Any, max_chars: int =
     return _format_result(result, format)
 
 
+def _inline_requests(ranges: list[str]) -> list[dict[str, Any]]:
+    requests = []
+    # Limit the complete normalized request, not each flag independently.
+    size = 2
+    for value in ranges:
+        parts = value.rsplit(":", 2)
+        if len(parts) != 3 or not all(re.fullmatch(r"[0-9]{1,10}", bound) for bound in parts[1:]):
+            raise SourceError("invalid_inline_range_requires_path_start_end")
+        request = {"path": parts[0], "start": int(parts[1]), "end": int(parts[2])}
+        size += len(json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + bool(requests)
+        if size > MAX_REQUEST_BYTES:
+            raise SourceError("request_exceeds_256KiB_split_batch")
+        requests.append(request)
+    return requests
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, help="Exact local repository top-level directory")
     parser.add_argument("--revision", required=True, help="Full immutable 40- or 64-hex commit hash")
-    parser.add_argument("--request", required=True, help="JSON request file, or - to read JSON from stdin")
-    parser.add_argument("--max-chars", type=int, default=12000, help="Entire JSON response budget (minimum 1024)")
-    parser.add_argument("--format", choices=("verbose", "compact"), default="verbose", help="Line objects (default) or compact [number,text,true-if-redacted] arrays")
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--request", help="JSON request file, or - to read JSON from stdin")
+    inputs.add_argument("--range", action="append", help="Repeat repository-relative path:start:end (inclusive)")
+    parser.add_argument("--max-chars", "--max-bytes", type=int, default=12000, help="Entire UTF-8 response byte budget (minimum 1024)")
+    parser.add_argument("--format", choices=("verbose", "compact", "text"), default="verbose", help="Line objects (default), compact arrays, or a numbered text packet")
     args = parser.parse_args(argv)
     if args.max_chars < MIN_BUDGET:
         parser.error("--max-chars must be at least 1024")
     try:
-        if args.request == "-":
-            data = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+        if args.range is not None:
+            requests = _inline_requests(args.range)
         else:
-            with Path(args.request).open("rb") as stream:
-                data = stream.read(MAX_REQUEST_BYTES + 1)
-        if len(data) > MAX_REQUEST_BYTES:
-            raise SourceError("request_exceeds_256KiB_split_batch")
-        requests = json.loads(data)
+            if args.request == "-":
+                data = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+            else:
+                with Path(args.request).open("rb") as stream:
+                    data = stream.read(MAX_REQUEST_BYTES + 1)
+            if len(data) > MAX_REQUEST_BYTES:
+                raise SourceError("request_exceeds_256KiB_split_batch")
+            requests = json.loads(data)
         result = read_ranges(args.root, args.revision, requests, args.max_chars, format=args.format)
     except (OSError, ValueError, RecursionError, SourceError) as exc:
         result = _format_result({"status": "failed", "error": str(exc) if isinstance(exc, SourceError) else "invalid_or_unreadable_request_json", "remaining": "entire_request"}, args.format)
     # Bypass Windows text newline translation: the final LF is budgeted once.
-    sys.stdout.buffer.write(encode(result).encode("ascii"))
+    sys.stdout.buffer.write(encode_bytes(result))
     return {"complete": 0, "partial": 1, "failed": 2}[result["status"]]
 
 
