@@ -39,6 +39,7 @@ Resolve `<plugin-root>` from this skill's absolute location (two parent director
 - `aws_cost_snapshot.py`: dimension breakdown and previous-period comparison.
 - `snapshot_diff.py`: offline comparison of findings from compatible saved snapshots.
 - `agent_handoff.py`: offline validation of team plans and evidence handoffs; it does not launch agents.
+- `source_slice.py`: bounded line ranges from an immutable Git revision; use after symbol discovery for large source reads. Follow delivered/remaining ranges until required coverage is complete; see `--help` for the request format.
 - Other specialist helpers retain their documented commands. See `--help` for exact options.
 
 Prefer concise findings with source and time. End with `Changed | Validate | Next` when appropriate to the user's requested format.

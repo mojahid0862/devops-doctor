@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.15 — 2026-11-12
+
+- Make continuation/recheck handling explicit: reuse verified unchanged analysis and compatible workers, refresh mutable or changed evidence, and retain requested validation and coverage.
+- Separate repeat-task measurements from fresh independent reviews. Neither local fresh-review trial established an uncached-input improvement; no universal savings claim is made.
+- Include the validated bounded immutable-source reader and evidence/handoff reuse improvements from the local candidates.
+
+## 0.3.14 (local test candidate) — 2026-11-12
+
+- Add bounded immutable-source range reading with explicit unread coverage, overlap deduplication, and secret redaction; locate relevant symbols before reading large files.
+- Track examined revision/ranges and compare duplicate Git blobs while preserving distinct caller/configuration checks. Scope worker-status reads to the active task.
+- Retain the 0.3.13 evidence/test/handoff reuse rules. The first local trial reduced output and elapsed time but failed the uncached-input target; recorded cache loss and broad reads are disclosed in local benchmark evidence.
+
+## 0.3.13 (local test candidate) — 2026-11-12
+
+- Reduce duplicated context and generated artifacts with one canonical worker handoff and selective coordinator evidence reads.
+- Reuse verified immutable source and compatible safe validation harnesses; refresh mutable state and changed or incomplete evidence as required.
+- Preserve adaptive parallel dispatch, complete security coverage, authorization, exact technical details and unchanged model selection. Measure whole-team uncached input, output and elapsed time rather than assuming savings.
+
 ## 0.3.12 — 2026-11-12
 
 - Adapt concise-reporting ideas from the pinned Caveman review: one statement per finding, follow-ups containing changed facts, and exact technical details preserved.
