@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.20 - 2026-11-12
+
+- Add explicit bounded local-evidence reads with exact adjacent-line packing and JSON selection, source-integrity checks, recoverable ranges and visible partial/error/redaction markers.
+- Adopt source-verified Caveman investigation stopping, safe helper reuse and compressed-absence validation without weakening required checks or parallel-agent policy.
+- Document what was adopted, what needs an external runtime, and upstream benchmark limitations. No proxy, hook, model, cache or Cloud-routing changes; no runtime savings claim.
+
 ## 0.3.19 - 2026-11-12
 
 - Add direct numbered source packets and inline range arguments to remove repeated request-file and JSON-rendering wrappers. Keep all identity, redaction, error and coverage metadata.

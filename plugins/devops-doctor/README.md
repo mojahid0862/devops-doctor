@@ -1,4 +1,4 @@
-# DevOps Doctor 0.3.19
+# DevOps Doctor 0.3.20
 
 Read-only diagnostic skills and Python helpers for GitLab and AWS, plus offline Terraform, repo, and saved-finding reviews.
 
@@ -12,6 +12,8 @@ Read-only diagnostic skills and Python helpers for GitLab and AWS, plus offline 
 Run examples from this plugin directory. When operating inside another repo, invoke the helper by its absolute path and pass `--root` explicitly for repo scans. Never copy credential values into command arguments or this package.
 
 ## Compatible reader updates
+
+Version 0.3.20 adds explicit local-evidence packing and bounded retrieval for saved artifacts through `scripts/evidence_slice.py`. Full originals remain unchanged; source digests, coverage and errors remain visible. See [Caveman adoption and limits](CAVEMAN-ADOPTION.md) for pinned implementation evidence, actual integration boundaries and validation scope. This is an invoked helper, not automatic host-wide compression.
 
 Version 0.3.19 adds direct `--range 'path:start:end' --format text` source reads. Numbered sanitized text carries complete identity, redaction, error and coverage metadata, so workers need no request-file or JSON-rendering wrappers. `--max-bytes` bounds the complete UTF-8 packet; `--max-chars` remains an alias. Default and compact JSON interfaces remain supported. Use `--help` for the interface and preserve required source coverage; actual time/token improvements require matched runtime measurements.
 
