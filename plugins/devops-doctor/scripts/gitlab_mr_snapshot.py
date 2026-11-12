@@ -9,7 +9,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote
 
 from doctor_common import emit_result, redact, run_command
 
@@ -48,12 +48,29 @@ def run_glab_pages(glab: str, endpoint: str, *, max_pages: int = 5,
     """Bound API work and report incomplete evidence, including partial failures."""
     if not 1 <= max_pages <= 20 or not 1 <= per_page <= 100:
         raise ValueError("max_pages must be 1..20 and per_page 1..100")
+    path, _, query = endpoint.partition("?")
+    filters = parse_qsl(query, keep_blank_values=True, errors="strict")
+    keys: set[str] = set()
+    args = ["api", path, "--method", "GET"]
+    for key, value in filters:
+        # glab fields use a map: repeated keys would silently discard a filter.
+        if not key or "=" in key or key in keys or key in {"page", "per_page"}:
+            raise ValueError("query filters need unique nonempty keys and cannot set page/per_page")
+        field = f"{key}={value}"
+        # A batch shim still invokes cmd.exe even with subprocess shell=False.
+        # Do not decode escaped shell metacharacters into its argument list.
+        if os.name == "nt" and glab.lower().endswith((".cmd", ".bat")) and any(
+                char in '&|<>^%!"()' or ord(char) < 32 for char in field):
+            raise ValueError("query filter contains unsupported shell characters for a Windows glab batch shim")
+        keys.add(key)
+        args.extend(["--raw-field", field])
     items: list[Any] = []
     commands: list[str] = []
     duration = 0
     for page in range(1, max_pages + 1):
-        separator = "&" if "?" in endpoint else "?"
-        result = run_glab(glab, ["api", f"{endpoint}{separator}per_page={per_page}&page={page}"])
+        # Fields otherwise change glab's default method to POST; force GET.
+        result = run_glab(glab, [*args, "--raw-field", f"per_page={per_page}",
+                                "--raw-field", f"page={page}"])
         commands.append(result.get("command", ""))
         duration += result.get("duration_ms", 0)
         if not result.get("ok") or result.get("truncated") or not isinstance(result.get("data"), list):

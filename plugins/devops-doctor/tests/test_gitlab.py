@@ -4,8 +4,10 @@ import argparse
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -214,7 +216,73 @@ class PagingTests(unittest.TestCase):
         self.assertEqual(101, len(result["data"]))
         self.assertTrue(result["complete"])
         self.assertEqual([100], [row["id"] for row in pipeline.summarize_jobs(result)["failed"]])
-        self.assertIn("page=2", read.call_args_list[1].args[1][1])
+        self.assertEqual(["api", "projects/test/pipelines/1/jobs", "--method", "GET",
+                          "--raw-field", "per_page=100", "--raw-field", "page=2"],
+                         read.call_args_list[1].args[1])
+
+    def test_query_filters_remain_literal_on_every_page(self):
+        endpoint = "projects/test/jobs?search=%40fixture&simple=true&name=&number=001&branch=%3Abranch"
+        with patch.object(mr, "run_glab", side_effect=[ok([{}, {}]), ok([])]) as read:
+            result = mr.run_glab_pages("glab", endpoint, max_pages=2, per_page=2)
+        self.assertTrue(result["complete"])
+        for page, call in enumerate(read.call_args_list, 1):
+            self.assertEqual(["api", "projects/test/jobs", "--method", "GET",
+                              "--raw-field", "search=@fixture", "--raw-field", "simple=true",
+                              "--raw-field", "name=", "--raw-field", "number=001",
+                              "--raw-field", "branch=:branch", "--raw-field", "per_page=2",
+                              "--raw-field", f"page={page}"], call.args[1])
+
+    def test_ambiguous_or_pagination_filters_fail_before_any_command(self):
+        for query in ("search=a&search=b", "name=&name=b", "page=3", "per_page=1", "=empty", "na%3Dme=value"):
+            with self.subTest(query=query), patch.object(mr, "run_glab") as read:
+                with self.assertRaises(ValueError):
+                    mr.run_glab_pages("glab", "projects/test/jobs?" + query)
+                read.assert_not_called()
+
+    def test_batch_filter_metacharacters_fail_before_any_command(self):
+        for extension in (".cmd", ".BAT"):
+            for character in '&|<>^%!"()\r\n':
+                endpoint = "projects/test/jobs?search=" + mr.quote(character, safe="")
+                with self.subTest(extension=extension, character=character), \
+                     patch.object(mr.os, "name", "nt"), patch.object(mr, "run_glab") as read:
+                    with self.assertRaisesRegex(ValueError, "Windows glab batch shim"):
+                        mr.run_glab_pages("glab" + extension, endpoint)
+                    read.assert_not_called()
+
+    def test_native_executable_preserves_encoded_filter_metacharacters(self):
+        with patch.object(mr, "run_glab", return_value=ok([])) as read:
+            mr.run_glab_pages("glab.exe", "projects/test/jobs?search=a%26b%25c")
+        self.assertIn("search=a&b%c", read.call_args.args[1])
+
+    @unittest.skipUnless(os.name == "nt", "requires Windows cmd.exe")
+    def test_windows_batch_shim_captures_complete_pagination_arguments(self):
+        with tempfile.TemporaryDirectory(prefix="doctor glab ") as directory:
+            root = Path(directory)
+            capture = root / "capture.py"
+            capture.write_text("import json, sys\n"
+                               "args = sys.argv[1:]\n"
+                               "rows = 2 if 'page=1' in args else 1\n"
+                               "print(json.dumps([{'argv': args}] * rows))\n", encoding="utf-8")
+            shim = root / "glab.cmd"
+            shim.write_text(f'@echo off\n"{sys.executable}" "{capture}" %*\n', encoding="utf-8")
+            original = {path: path.read_bytes() for path in (capture, shim)}
+            endpoint = "projects/group%2Fsubgroup%2Frepo/pipelines/1/jobs"
+            for query, fields in (("", []), ("?search=sample+value&simple=true&name=",
+                                   ["--raw-field", "search=sample value", "--raw-field", "simple=true",
+                                    "--raw-field", "name="])):
+                with self.subTest(query=query):
+                    result = mr.run_glab_pages(str(shim), endpoint + query, per_page=2, max_pages=2)
+                    self.assertTrue(result["ok"], result)
+                    self.assertTrue(result["complete"], result)
+                    self.assertEqual(2, result["pages"])
+                    self.assertEqual(3, len(result["data"]))
+                    for page, row in ((1, result["data"][0]), (2, result["data"][-1])):
+                        self.assertEqual(["api", endpoint, "--method", "GET", *fields,
+                                          "--raw-field", "per_page=2", "--raw-field", f"page={page}"], row["argv"])
+            # The same offline shim reproduces the previous '&' split.
+            legacy = mr.run_glab(str(shim), ["api", endpoint + "?per_page=2&page=1"])
+            self.assertFalse(legacy["ok"])
+            self.assertEqual(original, {path: path.read_bytes() for path in original})
 
     def test_page_cap_is_partial_not_empty_success(self):
         with patch.object(mr, "run_glab", return_value=ok([{}] * 100)):

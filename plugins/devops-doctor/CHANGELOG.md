@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.11 — 2026-11-12
+
+- Build paginated GitLab reads with explicit GET and literal fields instead of ampersand-separated pagination; reject ambiguous/unsafe query inputs before execution and retain collection completeness gates.
+- Add concrete guidance for compatible CLI flags, Windows query handling, reusing successful empty reads, bounded source excerpts and reliable focused test harnesses.
+- Preserve security validation, provenance checks, authorization, model choice and reasoning effort. These changes remove identified retry/recollection paths; no unmeasured live speedup is claimed.
+
 ## 0.3.10 — 2026-11-12
 
 - Size the initial team from substantial ready packages and current free capacity; split oversized scopes and refill ready work within the shared 20-worker and explicit limits.

@@ -1,4 +1,4 @@
-# DevOps Doctor 0.3.10
+# DevOps Doctor 0.3.11
 
 Read-only diagnostic skills and Python helpers for GitLab and AWS, plus offline Terraform, repo, and saved-finding reviews.
 
@@ -28,6 +28,8 @@ python scripts/repo_devops_scan.py --root /path/to/repo --max-files 10000 --outp
 Preflight defaults to local. Stack service collection defaults to 4 workers; S3 details default to 20 buckets, with partial coverage reported. Repo scans prune dependency/build directories before walking their contents and skip files over 2 MiB. Limits are explicit, not silent success.
 
 ## GitLab review
+
+Paginated reads use explicit GET and separate literal query fields to avoid ampersand-separated pagination through Windows command wrappers. Invalid or unsafe wrapper query inputs fail before execution. For direct CLI reads, use locally supported flags and parse JSON locally; see [investigation efficiency](skills/devops-doctor/references/investigation-efficiency.md) for task-local read receipts, bounded excerpts and safe invocation. Required security checks and the selected model/reasoning setting are preserved.
 
 ```bash
 python scripts/gitlab_mr_fast_review.py --repo group/project --mr-iid 44 --max-pages 5 --output work/mr.json
