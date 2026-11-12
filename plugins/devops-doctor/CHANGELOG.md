@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.10 — 2026-11-12
+
+- Size the initial team from substantial ready packages and current free capacity; split oversized scopes and refill ready work within the shared 20-worker and explicit limits.
+- Remove the sample plan's explicit two-worker cap and revise two-branch role examples so they do not anchor large reviews to a small team.
+- Reduce token overhead through scoped context and evidence reuse instead of serializing independently ready substantial work. Preserve direct handling of small/dependent tasks and all authorization boundaries.
+- Add regression coverage for copied example plans gaining more than two ready branches. Offline plan width remains separate from verified native execution and performance.
+
 ## 0.3.9 — 2026-10-27
 
 - Dispatch useful ready work before deep coordinator reads or waits; assigned workers execute scoped tasks without repeating team planning.

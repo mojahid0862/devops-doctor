@@ -2,7 +2,7 @@
 
 These are task roles instantiated with the host's native subagent tools, not installed models, background services, or additional permissions. The coordinator remains responsible for scope and the final result.
 
-One main agent may coordinate up to 20 subagents across these roles, using only as many as the task needs and the runtime permits. Repeat a role for independent scopes when useful; the six templates are not a six-worker cap. Prefer direct work for tiny tasks and keep dependent steps ordered. The 20-worker budget includes every descendant together.
+One main agent may coordinate up to 20 concurrent subagents including all descendants. Apply [the team sizing rule](../SKILL.md#select-a-team) to ready nontrivial packages and current capacity. Repeat roles for independent scopes; the six role templates and examples below describe coverage, not worker-count limits. Split broad investigations by module, resource, job, region, or question when independently executable. Keep tiny tasks direct and actual dependencies ordered.
 
 | Role | Skill/context to provide | Assignment and return |
 | --- | --- | --- |
@@ -21,15 +21,15 @@ One main agent may coordinate up to 20 subagents across these roles, using only 
 
 ## Large merge request
 
-The coordinator or designated collector fetches one current-SHA metadata/diff/CI set. Delegate separate correctness/delivery and security/performance concerns against that same artifact. Required CI remains unverified while pending, regardless of reviewers' conclusions. One owner applies any authorized patch; verification follows that patch.
+The coordinator or designated collector fetches one current-SHA metadata/diff/CI set. Partition substantial review by independently reviewable module or subsystem, covering applicable correctness, delivery, security, and performance concerns. Give shared cross-cutting concerns one owner. Required CI remains unverified while pending, regardless of reviewers' conclusions. Assign authorized patches exclusive paths; verification follows the frozen patch.
 
 ## Cost investigation
 
-One owner fetches billing totals/dimensions; a second fetches only relevant utilization/configuration evidence. Avoid two broad inventories. Analysts share the account, period, service filter, metric, and currency; technical data is not automatically proof of financial savings.
+Give each billing or utilization/configuration collection one owner; distribute independently answerable service, region, or cost-driver analyses using the shared evidence. Collector count does not cap analysis width. Avoid duplicate broad inventories. Analysts share the account, period, service filter, metric, and currency; technical data is not automatically proof of financial savings.
 
 ## Terraform change
 
-Use one protected plan artifact and its content hash. Split destructive/lifecycle review from IAM/network review. Neither worker runs apply or regenerates the plan unnoticed. The coordinator resolves discrepancies and checks scope/unknowns before proposing a rollout.
+Use one protected plan artifact and its content hash. Partition substantial plans by independently reviewable module or resource group, covering destructive/lifecycle and IAM/network concerns with one owner for shared issues. Workers do not run apply or regenerate the plan unnoticed. The coordinator resolves discrepancies and checks scope/unknowns before proposing a rollout.
 
 ## Task message template
 

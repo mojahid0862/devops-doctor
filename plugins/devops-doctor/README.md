@@ -1,4 +1,4 @@
-# DevOps Doctor 0.3.9
+# DevOps Doctor 0.3.10
 
 Read-only diagnostic skills and Python helpers for GitLab and AWS, plus offline Terraform, repo, and saved-finding reviews.
 
@@ -14,6 +14,8 @@ Run examples from this plugin directory. When operating inside another repo, inv
 ## Faster scoped operation
 
 The coordinator dispatches useful independent branches before deep reads or waits. Workers receive concise assignments and execute them without repeating team planning. Independent tests and review may overlap on frozen inputs; durable handoff files are optional when useful. Performance comparisons must measure actual execution overlap, elapsed time, and available coordinator-plus-worker token totals. More workers do not guarantee less time or fewer tokens.
+
+For substantial work, first split independently executable scopes and batch trivial or tightly coupled checks. Initial width is the minimum of ready packages, free native slots, the remaining shared 20-worker allowance, and explicit task limits, subject to real access/rate/budget constraints. Six substantial ready scopes can use six workers when capacity permits; role templates and historical worker counts do not cap the team. A general low-token preference calls for concise context and evidence reuse, not bundling a large ready workload into one or two workers. The sample handoff plan now uses `max_workers: "auto"`.
 
 ```bash
 python scripts/devops_doctor_preflight.py --scope local
