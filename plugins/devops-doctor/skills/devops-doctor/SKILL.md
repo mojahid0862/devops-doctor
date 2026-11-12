@@ -1,38 +1,45 @@
 ---
 name: devops-doctor
-description: Route DevOps tasks across code review, GitLab delivery, AWS incidents and health, infrastructure cost, security, and Terraform. Select relevant specialists under the shared evidence and adaptive team workflow.
+description: Route DevOps tasks across code review, GitLab delivery, AWS incidents and health, infrastructure cost, security, and Terraform. Apply shared task assessment and adaptive delegation across domains, then select the relevant specialist.
 ---
 
 # DevOps Doctor
 
-Apply [the shared evidence contract](references/evidence-contract.md) once. Main agents follow [DevOps Team's canonical workflow](../devops-team/SKILL.md); assigned workers load only their scoped specialist and missing constraints. Select by the actual question, without loading every skill or collecting unrelated inventory.
+Read [the shared evidence contract](references/evidence-contract.md). The main agent assesses scope/evidence and team size, then uses `$devops-team` to dispatch useful ready branches before detailed work or waits. Choose the relevant specialist for each branch. Assigned workers execute their scoped task without repeating coordinator routing. Small or strictly dependent tasks stay direct; do not load every skill or collect unrelated inventory.
 
 | User goal | Specialist |
 | --- | --- |
-| All backends/account-wide health | `$devops-team` and [backend health](../devops-team/references/backend-health.md) |
-| Agents/parallel specialist work | `$devops-team` |
-| Multi-step GitLab/AWS investigation | `$devops-operator` |
-| MR review | `$gitlab-mr-review` |
-| Failed pipeline/job | `$gitlab-pipeline-doctor` |
+| Check all backends, account-wide health, or multiple independent resource groups | `$devops-team` and its [backend health workflow](../devops-team/references/backend-health.md) |
+| Agents, subagents, or parallel specialist work | `$devops-team` |
+| Coordinate a multi-step GitLab/AWS investigation | `$devops-operator` |
+| Review an MR | `$gitlab-mr-review` |
+| Diagnose a failed pipeline/job | `$gitlab-pipeline-doctor` |
 | AWS cross-service deployment incident | `$aws-deployment-doctor` |
-| ECS/Fargate tasks or target health | `$ecs-fargate-doctor` |
+| ECS/Fargate service, tasks, or target health | `$ecs-fargate-doctor` |
 | Terraform plan risks | `$terraform-plan-review` |
-| AWS spend/rightsizing | `$cost-optimizer` |
-| Security posture/snapshot drift | `$security-drift-check` |
+| AWS spend, cost changes, or rightsizing | `$cost-optimizer` |
+| Security posture or saved-snapshot drift | `$security-drift-check` |
 | Rollback/recovery plan | `$rollback-planner` |
 | Logs, metrics, alarms, incident timeline | `$observability-doctor` |
 
-Resolve the requested account/region/resource or GitLab project/MR/job and inspect relevant local configuration. Check selected-scope readiness only when unknown; reuse it until auth failure/context change. Do not preflight immediately before a helper that checks the same authentication. For a requested fix, produce the minimal patch, validation and rollback within existing authorization.
+## Efficient investigation
+
+1. Resolve the requested account/region/resource or GitLab project/MR/job. Inspect relevant local configuration; it describes intended state, not proof of deployed state.
+2. Check readiness only for the selected scope when unknown. Reuse readiness within the investigation; invalidate after auth failure or a context change. Do not run preflight immediately before a helper that already checks the same authentication.
+3. Build the smallest useful shared task map from existing evidence: resources, code/diff, jobs, costs, or plan changes as relevant. Assign ready independent branches to native workers and combine their findings. Reuse or add workers when new work becomes ready; do not finish the task serially before assessing delegation. Preserve dependency order, exclusive ownership, and direct handling of tiny tasks. Disclose unavailable capacity; API concurrency alone is not agent participation.
+4. Correlate timestamps before assigning causality. Report observed facts, inference, incomplete coverage, and the next verification separately.
+5. For a requested fix, produce the minimal patch, validation, and rollback. Existing authorization persists; production actions beyond its scope need approval.
 
 ## Packaged helpers
 
-Resolve `<plugin-root>` from this skill's absolute location (two parent directories). Preserve the user's repository cwd and invoke `python "<plugin-root>/scripts/<helper>.py"`; see each helper's `--help` for options.
+Resolve `<plugin-root>` from this skill's absolute location (two parent directories). Keep the user's repository as the working directory. Use `python "<plugin-root>/scripts/<helper>.py"`; do not resolve helper paths against the user's cwd.
 
-- `devops_doctor_preflight.py --scope local|gitlab|aws|all`: local by default; select remote scope explicitly.
-- `aws_stack_snapshot.py`: bounded concurrent collection of selected services.
-- `aws_cost_snapshot.py`: dimension breakdown/previous-period comparison.
-- `snapshot_diff.py`: offline comparison of compatible saved findings.
-- `agent_handoff.py`: offline plan/handoff validation; never launches agents.
-- `source_slice.py`: immutable-revision line ranges after symbol discovery. Prefer `--format compact` for human/model reads; default JSON remains for consumers. Follow [coverage rules](references/investigation-efficiency.md#pinned-source-reader).
+- `devops_doctor_preflight.py --scope local|gitlab|aws|all`: default local; select remote scope explicitly.
+- `aws_stack_snapshot.py`: bounded concurrent collection for selected services.
+- `aws_cost_snapshot.py`: dimension breakdown and previous-period comparison.
+- `snapshot_diff.py`: offline comparison of findings from compatible saved snapshots.
+- `agent_handoff.py`: offline validation of team plans and evidence handoffs; it does not launch agents.
+- `source_slice.py`: bounded line ranges from an immutable Git revision; use after symbol discovery for large source reads. Follow delivered/remaining ranges until required coverage is complete; see `--help` for the request format.
+- Other specialist helpers retain their documented commands. See `--help` for exact options.
 
-Return concise findings with source/time and the team's participation/validation summary; respect the user's requested format.
+Prefer concise findings with source and time. End with `Changed | Validate | Next` when appropriate to the user's requested format.

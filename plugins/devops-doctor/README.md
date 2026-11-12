@@ -1,4 +1,4 @@
-# DevOps Doctor 0.3.16
+# DevOps Doctor 0.3.18
 
 Read-only diagnostic skills and Python helpers for GitLab and AWS, plus offline Terraform, repo, and saved-finding reviews.
 
@@ -11,11 +11,13 @@ Read-only diagnostic skills and Python helpers for GitLab and AWS, plus offline 
 
 Run examples from this plugin directory. When operating inside another repo, invoke the helper by its absolute path and pass `--root` explicitly for repo scans. Never copy credential values into command arguments or this package.
 
+## Compatible reader updates
+
+Version 0.3.18 retains the stable 0.3.15 coordination policy. Fresh-task policy experiments did not establish lower uncached input, output and elapsed time together and are not enabled. The reader adds opt-in `--format compact` with identical coverage metadata, and masks complete recognized secret assignments including fallback expressions. Default JSON remains compatible; fewer serialized bytes are not a runtime token-savings claim.
+
 ## Faster scoped operation
 
 Reduce repeated transfers and generated text: reuse verified immutable source, complete scoped collection receipts and compatible safe tests; refresh changed or mutable evidence. Each worker keeps one canonical result, and the coordinator reads decisive evidence and links supporting detail instead of generating duplicate report/provenance formats. Required coverage and validation remain unchanged.
-
-Fresh investigations use scoped worker instructions and compact source output (`source_slice.py --format compact`). Compact output preserves complete source lines, numbering, redaction markers and coverage metadata; existing JSON consumers retain the default format. These changes remove repeated representation overhead. Runtime token and time savings still require a matched workload measurement.
 
 Reports use concise natural language, one statement per finding, and follow-ups limited to new facts. Large evidence stays in sanitized local artifacts with precise retrieval references; status and coverage gaps remain visible. This adapts ideas reviewed in [Caveman](https://github.com/JuliusBrussee/caveman/tree/3dc497a7f858c774d6e15b25e8c6120ef3a0eda8) without importing its code, proxy, hooks, telemetry or compression runtime. Exact technical content and required validation are preserved. Output brevity alone does not establish total-token or cost savings.
 

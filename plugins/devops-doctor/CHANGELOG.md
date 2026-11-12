@@ -1,12 +1,19 @@
 # Changelog
 
-## 0.3.16 — 2026-11-12
+## 0.3.18 - 2026-11-12
 
-- Add opt-in compact immutable-source output that removes repeated per-line labels while retaining source text, line numbers, redaction markers, identity and explicit coverage gaps. Default JSON remains compatible.
-- Consolidate shared instructions and give fresh workers scoped context; keep adaptive native parallelism, complete evidence coverage, validation and canonical findings.
-- Relay tool text once with separate status metadata, avoiding repeated JSON escaping of source and logs.
-- Mask complete recognized secret assignments, including fallback/ternary expressions, instead of exposing later operands after partial redaction.
-- Compare fresh investigations with the same source snapshots, required checks and model settings. Report measured uncached input, output, elapsed time and quality coverage; representation size alone is not a token-savings claim.
+- Retain the stable 0.3.15 task/agent policy after matched fresh-task candidates failed the combined uncached-input, output and elapsed-time target. Adaptive native delegation up to 20 concurrent descendants remains available.
+- Add opt-in compact immutable-source output with complete lines, numbering, redaction flags and unchanged identity/error/coverage metadata. Default JSON stays compatible; no runtime savings guarantee is made.
+- Mask complete recognized secret assignments and continuations, including fallback/ternary operands. Validate with synthetic values; redaction remains best effort.
+
+## 0.3.17 (local test candidate; not retained) - 2026-11-12
+
+- Tested finer independent task partitioning with 14 real parallel workers. The matched run increased uncached input/output and took longer than the six-worker baseline; wider teams are not automatically faster or cheaper.
+
+## 0.3.16 (local test candidates; policy changes not retained) - 2026-11-12
+
+- Tested shorter shared instructions, compact source delivery and separate text/metadata relay on the same pinned source and validation scope. These trials did not meet all fresh-task performance goals.
+- Retain only the compatible reader capability and credential-expression redaction correction in 0.3.18.
 
 ## 0.3.15 — 2026-11-12
 
