@@ -1,4 +1,4 @@
-# DevOps Doctor 0.3.11
+# DevOps Doctor 0.3.12
 
 Read-only diagnostic skills and Python helpers for GitLab and AWS, plus offline Terraform, repo, and saved-finding reviews.
 
@@ -12,6 +12,8 @@ Read-only diagnostic skills and Python helpers for GitLab and AWS, plus offline 
 Run examples from this plugin directory. When operating inside another repo, invoke the helper by its absolute path and pass `--root` explicitly for repo scans. Never copy credential values into command arguments or this package.
 
 ## Faster scoped operation
+
+Reports use concise natural language, one statement per finding, and follow-ups limited to new facts. Large evidence stays in sanitized local artifacts with precise retrieval references; status and coverage gaps remain visible. This adapts ideas reviewed in [Caveman](https://github.com/JuliusBrussee/caveman/tree/3dc497a7f858c774d6e15b25e8c6120ef3a0eda8) without importing its code, proxy, hooks, telemetry or compression runtime. Exact technical content and required validation are preserved. Output brevity alone does not establish total-token or cost savings.
 
 The coordinator dispatches useful independent branches before deep reads or waits. Workers receive concise assignments and execute them without repeating team planning. Independent tests and review may overlap on frozen inputs; durable handoff files are optional when useful. Performance comparisons must measure actual execution overlap, elapsed time, and available coordinator-plus-worker token totals. More workers do not guarantee less time or fewer tokens.
 

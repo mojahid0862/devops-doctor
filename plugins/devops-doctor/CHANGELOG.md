@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.12 — 2026-11-12
+
+- Adapt concise-reporting ideas from the pinned Caveman review: one statement per finding, follow-ups containing changed facts, and exact technical details preserved.
+- Return compact structured evidence previews with status/coverage markers and recoverable local references; preserve full required review and validation.
+- Add no compression proxy, hooks, telemetry, model routing, dependencies or fixed savings claims. Compare complete runtime usage and coverage rather than output length alone.
+
 ## 0.3.11 — 2026-11-12
 
 - Build paginated GitLab reads with explicit GET and literal fields instead of ampersand-separated pagination; reject ambiguous/unsafe query inputs before execution and retain collection completeness gates.
