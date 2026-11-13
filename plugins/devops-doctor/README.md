@@ -78,6 +78,20 @@ Reuse matching deployment, alarm, ECS, and Lambda evidence when building the tim
 
 Use opaque diagnostic IDs and a profile with AWS CLI history disabled. Selectors can be visible in process arguments, shell history, AWS CLI history when enabled, and the query stored by CloudWatch.
 
+## AWS Security Hub and GuardDuty findings
+
+~~~bash
+python scripts/aws_security_findings.py --profile dev --account-id 123456789012 --region ap-south-1
+~~~
+
+The helper verifies the expected account with STS and checks the account and Region on each finding, including results from Security Hub aggregation. This scope uses ASFF `AwsAccountId` and `Region`, OCSF `cloud.account.uid` and `cloud.region`, and GuardDuty `AccountId` and `Region`. Underlying event origin is unverified. Related resources may span accounts or Regions and retain their own location when AWS supplies it. Security Hub V2 (OCSF) is the default. Use `--securityhub-api cspm` for Security Hub CSPM (ASFF) and repeat `--service` to select sources. GuardDuty includes both active and archived findings. Keep the per-service counts separate because Security Hub can also import GuardDuty findings.
+
+The summary reports severity counts, attack-sequence and exposure counts, service outcomes, and coverage gaps. It omits finding IDs, resource IDs, descriptions, tags, and AWS error bodies. Add `--evidence-dir <new-directory>` under a trusted local parent to save a projected `findings.json` with original finding IDs, source, account, Region, resource identities, severity, status, and timestamps. Keep that directory out of Git and shared or synced folders. This option requires Windows Python with private directory support (3.10.15+, 3.11.10+, 3.12.4+, or 3.13+) or a POSIX filesystem that enforces owner-only permissions. The collector checks CLI history locally before AWS calls and stops if history is enabled or its setting cannot be checked. GuardDuty finding IDs used in detail requests and pagination tokens can still be visible to privileged local process monitoring.
+
+Defaults are 50 findings examined and five pages per service, 25 entries per page, a shared 60-second AWS CLI budget, and 64 KiB per emitted artifact. See `--help` for bounded overrides. The configured AWS CLI profile needs the applicable Security Hub describe and findings reads, or GuardDuty `ListDetectors`, `GetDetector`, `ListFindings`, and `GetFindings`. The collector uses standard AWS endpoints.
+
+Complete means the requested API listing finished within its bounds. Coverage is one account and Region and depends on the services, finding retention, and integrations configured there. Review configuration, detection coverage, and individual findings separately. Empty, disabled, unavailable, and truncated collections have distinct outcomes.
+
 ## Output and compatibility
 
 All helpers emit sanitized JSON with `schema_version: "2.0"`, `status`, and `collection.complete`. Exit 0 means collection/analysis completed, 1 means partial, and 2 means failure or invalid input. Completion does not mean no security issues: always inspect findings. Scripts calling v0.1 should handle the new nonzero partial/failure exits and decimal-string cost amounts.

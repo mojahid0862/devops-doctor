@@ -120,9 +120,9 @@ def configure_concurrency(max_workers: int) -> None:
 
 
 def run_command(
-    command: list[str], *, timeout: float = 60, parse_json: bool = True,
-    text_limit: int | None = None, aws_max_attempts: int | None = None,
-    aws_ignore_configured_endpoints: bool = False,
+    command: list[str], *, timeout: float = 60, parse_json: bool = True, text_limit: int | None = None,
+    aws_max_attempts: int | None = None, aws_ignore_configured_endpoints: bool = False,
+    sanitize_json: bool = True,
 ) -> dict[str, Any]:
     started = time.monotonic()
     result: dict[str, Any] = {"ok": False, "command": redacted_command(command), "returncode": None, "truncated": False}
@@ -140,7 +140,8 @@ def run_command(
             result["error"] = redact(proc.stderr or proc.stdout or f"command exited {proc.returncode}")[-2000:]
         elif parse_json:
             try:
-                result["data"] = sanitize(json.loads(proc.stdout))
+                data = json.loads(proc.stdout)
+                result["data"] = sanitize(data) if sanitize_json else data
                 result["ok"] = True
                 if isinstance(result["data"], dict):
                     result["truncated"] = any(result["data"].get(k) for k in ("NextToken", "nextToken", "NextPageToken", "next_page_token", "NextContinuationToken"))
@@ -216,7 +217,7 @@ def run_ecs_read(command: list[str], *, timeout: int = 60) -> dict[str, Any]:
     return result
 
 
-def emit_result(result: dict[str, Any], output: str | Path | None = None) -> int:
+def result_payload(result: dict[str, Any]) -> tuple[str, int]:
     clean = sanitize(result)
     status = collect_status(clean)
     weights = {"complete": 0, "partial": 1, "failed": 2}
@@ -228,6 +229,11 @@ def emit_result(result: dict[str, Any], output: str | Path | None = None) -> int
     clean.setdefault("generated_at", datetime.now(timezone.utc).isoformat())
     clean.setdefault("collection", {})["complete"] = status == "complete"
     payload = json.dumps(clean, indent=2, sort_keys=True, default=str, ensure_ascii=False) + "\n"
+    return payload, weights[status]
+
+
+def emit_result(result: dict[str, Any], output: str | Path | None = None) -> int:
+    payload, code = result_payload(result)
     if output:
         target = Path(output)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -241,4 +247,4 @@ def emit_result(result: dict[str, Any], output: str | Path | None = None) -> int
                 os.unlink(temp_name)
     else:
         print(payload, end="")
-    return weights[status]
+    return code
