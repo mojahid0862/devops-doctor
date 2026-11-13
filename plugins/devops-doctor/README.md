@@ -92,6 +92,22 @@ Defaults are 50 findings examined and five pages per service, 25 entries per pag
 
 Complete means the requested API listing finished within its bounds. Coverage is one account and Region and depends on the services, finding retention, and integrations configured there. Review configuration, detection coverage, and individual findings separately. Empty, disabled, unavailable, and truncated collections have distinct outcomes.
 
+## CloudFormation offline review
+
+~~~bash
+python scripts/cloudformation_review.py template --file template.yaml --guard-rules security.guard
+python scripts/cloudformation_review.py change-set --file describe-change-set.json
+python scripts/cloudformation_review.py events --file describe-stack-events.json --output work/cfn-timeline.json
+~~~
+
+Review the smallest saved artifact that answers the question. The helper reads local files only. Supply the original JSON response body from AWS CLI or MCP for `DescribeChangeSet` or `DescribeStackEvents` and keep pagination markers. Preserve the reviewed input and pin it with `--sha256` when reproducing a report. A missing continuation marker cannot establish that a saved export includes every page.
+
+Template mode supports JSON with the standard library and YAML with an already available PyYAML installation. It reports literal exposure and encryption signals and flags state-retention policies for review. It leaves intrinsics, conditions, transforms, nested templates, and live settings unresolved. An installed `cfn-lint` checks a metadata-free copy with neutral configuration for templates without transforms or nested templates. An installed `cfn-guard` evaluates a supplied local rules file. Validator output is reduced to an outcome because diagnostics can echo private values. Missing tools or rules and skipped, failed, or timed-out checks are reported.
+
+Change set mode reports AWS-recorded actions and definite, conditional, or unknown replacements. Review dependencies, backup or retention, and rollback before acting on disruptive changes. Event mode orders timestamps and links earlier failures to rollback events when an operation ID or request token matches within the same stack. These links describe timing and correlation. The report uses aliases and reason categories instead of exporting raw resource IDs, reasons, or property values.
+
+Inputs use the shared 8 MiB limit. Supply regular files without symlinks for templates, exports, and Guard rules. Defaults are 500 items, 64 KiB of output, and 15 seconds per validator. See `--help` for bounded overrides. A partial report can still contain actionable findings.
+
 ## Output and compatibility
 
 All helpers emit sanitized JSON with `schema_version: "2.0"`, `status`, and `collection.complete`. Exit 0 means collection/analysis completed, 1 means partial, and 2 means failure or invalid input. Completion does not mean no security issues: always inspect findings. Scripts calling v0.1 should handle the new nonzero partial/failure exits and decimal-string cost amounts.
