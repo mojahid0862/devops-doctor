@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import stat
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -129,16 +130,44 @@ def severity(rule: str) -> str:
     return "info"
 
 
-def scan_file(path: Path, root: Path) -> list[dict[str, Any]]:
+def scan_file(
+    path: Path, root: Path, max_file_bytes: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     findings: list[dict[str, Any]] = []
+    relative = path.relative_to(root)
+    is_root_package = relative == Path("package.json")
+    package = None
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError as exc:
-        return [{"severity": "info", "rule": "read_error", "path": str(path.relative_to(root)), "detail": str(exc)}]
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or not path.resolve(strict=True).is_relative_to(root):
+            raise OSError("file is not a regular file within the scan root")
+        if info.st_size > max_file_bytes:
+            raise OSError("file exceeds scan byte limit")
+        with path.open("rb") as stream:
+            if not os.path.samestat(info, os.fstat(stream.fileno())):
+                raise OSError("file identity changed after discovery")
+            data = stream.read(max_file_bytes + 1)
+        if len(data) > max_file_bytes:
+            raise OSError("file exceeds scan byte limit")
+    except (OSError, RuntimeError) as exc:
+        return [{"severity": "info", "rule": "read_error", "path": str(relative), "detail": str(exc)}], None
+
+    if is_root_package:
+        try:
+            parsed = json.loads(data.decode("utf-8"))
+            if not isinstance(parsed, dict):
+                raise ValueError("expected a JSON object")
+            for key in ("dependencies", "devDependencies", "scripts"):
+                entries = parsed.get(key, {})
+                if not isinstance(entries, dict) or any(not isinstance(value, str) for value in entries.values()):
+                    raise ValueError("expected a map of strings for dependencies and scripts")
+            package = parsed
+        except (ValueError, RecursionError):
+            findings.append({"severity": "info", "rule": "invalid_package_json", "path": str(relative)})
 
     has_user = False
     is_dockerfile = path.name.startswith("Dockerfile") or path.suffix == ".Dockerfile"
-    for number, line in enumerate(lines, 1):
+    for number, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
         if is_dockerfile and re.search(r"(?i)^\s*USER\s+\S+", line):
             has_user = True
         for rule, pattern in RULES:
@@ -153,20 +182,11 @@ def scan_file(path: Path, root: Path) -> list[dict[str, Any]]:
                 )
     if is_dockerfile and not has_user:
         findings.append({"severity": "medium", "rule": "docker_runs_as_root_by_default", "path": str(path.relative_to(root)), "line": None})
-    return findings
+    return findings, package
 
 
-def load_json(path: Path) -> dict[str, Any] | None:
-    try:
-        return json.loads(path.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
-def repo_signals(root: Path, files: list[Path]) -> dict[str, Any]:
+def repo_signals(root: Path, files: list[Path], package: dict[str, Any] | None = None) -> dict[str, Any]:
     rel_files = [str(path.relative_to(root)).replace("\\", "/") for path in files]
-    package_json = root / "package.json"
-    package = load_json(package_json) if package_json.exists() else None
     deps = {}
     scripts = {}
     if package:
@@ -229,12 +249,21 @@ def main() -> int:
         return emit_result({"status": "failed", "blockers": [{"scope": "arguments", "reason": "root must be a directory, limits positive, max-workers 1..32"}]}, args.output)
     files, coverage = discover_files(root, args.max_files, args.max_file_bytes)
     findings: list[dict[str, Any]] = []
+    package = None
     max_workers = max(1, args.max_workers)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for file_findings in executor.map(lambda path: scan_file(path, root), files):
+        for file_findings, metadata in executor.map(lambda path: scan_file(path, root, args.max_file_bytes), files):
             findings.extend(file_findings)
-    signals = repo_signals(root, files)
+            if metadata is not None:
+                package = metadata
+    signals = repo_signals(root, files, package)
     findings.extend(signal_findings(signals))
+    blockers = [{"scope": "files", "reason": str(item)} for item in coverage["errors"]]
+    for item in findings:
+        if item["rule"] == "read_error":
+            blockers.append({"scope": item["path"], "reason": "file unreadable"})
+        elif item["rule"] == "invalid_package_json":
+            blockers.append({"scope": item["path"], "reason": "invalid or unsupported package metadata"})
 
     result = {
         "summary": {
@@ -248,7 +277,7 @@ def main() -> int:
         "findings": findings,
         "evidence": signals,
         "coverage": coverage,
-        "blockers": [{"scope": "files", "reason": str(item)} for item in coverage["errors"]] + [{"scope": item["path"], "reason": "file unreadable"} for item in findings if item["rule"] == "read_error"],
+        "blockers": blockers,
         "next_commands": [
             "git status --short",
             "npm run build",

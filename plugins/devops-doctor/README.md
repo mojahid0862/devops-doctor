@@ -1,4 +1,4 @@
-# DevOps Doctor 0.3.20
+# DevOps Doctor 0.3.24
 
 Read-only diagnostic skills and Python helpers for GitLab and AWS, plus offline Terraform, repo, and saved-finding reviews.
 
