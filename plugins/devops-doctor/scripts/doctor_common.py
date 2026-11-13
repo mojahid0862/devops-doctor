@@ -119,11 +119,19 @@ def configure_concurrency(max_workers: int) -> None:
     _COMMAND_SLOTS = threading.BoundedSemaphore(max_workers)
 
 
-def run_command(command: list[str], *, timeout: int = 60, parse_json: bool = True, text_limit: int | None = None) -> dict[str, Any]:
+def run_command(
+    command: list[str], *, timeout: float = 60, parse_json: bool = True,
+    text_limit: int | None = None, aws_max_attempts: int | None = None,
+    aws_ignore_configured_endpoints: bool = False,
+) -> dict[str, Any]:
     started = time.monotonic()
     result: dict[str, Any] = {"ok": False, "command": redacted_command(command), "returncode": None, "truncated": False}
     env = dict(os.environ)
     env.update({"AWS_PAGER": "", "AWS_CLI_AUTO_PROMPT": "off", "GLAB_PAGER": "", "GIT_PAGER": "cat", "GIT_TERMINAL_PROMPT": "0"})
+    if aws_max_attempts is not None:
+        env["AWS_MAX_ATTEMPTS"] = str(aws_max_attempts)
+    if aws_ignore_configured_endpoints:
+        env["AWS_IGNORE_CONFIGURED_ENDPOINT_URLS"] = "true"
     try:
         with _COMMAND_SLOTS:
             proc = subprocess.run(command, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, env=env)

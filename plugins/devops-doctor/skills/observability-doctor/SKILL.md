@@ -19,7 +19,7 @@ Read [the shared evidence contract](../devops-doctor/references/evidence-contrac
 ## Workflow
 
 1. Establish incident window, service, region, user impact, SLO/SLA, and recent deploy.
-2. Reuse fresh evidence and pull only missing signals. Choose the relevant connected-tool read or CLI example below, not all three; bind account/region and narrow alarm names, log groups, and service filters:
+2. Reuse saved deployment, alarm, ECS, and Lambda evidence for the same account, Region, and incident window. Pull only the missing signals. For an exact request or correlation ID across explicit log groups, use the [bounded Logs Insights helper](../../README.md#cloudwatch-logs-insights-correlation). Compare its timestamped samples with the existing timeline. Check the query outcome and coverage before drawing conclusions. Counts are scoped to usable returned rows. For other missing signals, choose the relevant connected-tool read or CLI example and narrow alarm names, log groups, and service filters:
 
 ```bash
 aws cloudwatch describe-alarms --region <region> --alarm-names <relevant-alarm-names>

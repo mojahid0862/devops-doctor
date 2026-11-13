@@ -62,6 +62,22 @@ Billing end dates are exclusive; default periods use completed UTC dates. Cost a
 
 Drift compares recorded findings, not all infrastructure settings. Account, region, collector, and filters must match. A partial snapshot cannot establish resolution. Keep the collector/ruleset version identical between baseline and current runs.
 
+## CloudWatch Logs Insights correlation
+
+Run from the plugin directory with the AWS CLI and an existing credential profile.
+
+~~~bash
+python scripts/aws_log_correlation.py --profile dev --account-id 123456789012 --region ap-south-1 --log-group /aws/lambda/orders --log-group /ecs/payments --start 2026-11-13T06:00:00Z --end 2026-11-13T06:15:00Z --correlation-id trace-123 --output work/log-correlation.json
+~~~
+
+Supply at least one of `--request-id` and `--correlation-id`. Both must match when supplied together. Use explicit groups in one account and Region and an inclusive start and exclusive end. The query recognizes common top-level JSON ID fields and plain-text ID labels. It flags structured HTTP 5xx and recognized error-level signals. Other schemas, unlogged requests, and delayed ingestion can leave gaps.
+
+Defaults are five groups, 60 minutes, 100 rows, five samples, 12 KiB of JSON, and ten polls within a 45-second CLI budget. See `--help` for bounded overrides. Samples are ordered by timestamp, favor distinct groups when space is limited, and contain report-local ID aliases in place of raw IDs. Raw log messages and AWS error bodies are excluded. Counts deduplicate usable returned rows. CloudWatch scan and match statistics are reported separately. A completed empty query means zero returned matches within the configured scope and recognized fields. Capped, unfinished, and invalid results remain partial or failed.
+
+Reuse matching deployment, alarm, ECS, and Lambda evidence when building the timeline. The helper uses standard AWS endpoints and needs STS identity plus CloudWatch Logs `StartQuery` and `GetQueryResults`, with `StopQuery` for best-effort cleanup. Queries can incur scan charges. Result and output limits bound returned evidence, while the amount scanned depends on the selected groups and window. The report flags when a query may continue after local collection ends.
+
+Use opaque diagnostic IDs and a profile with AWS CLI history disabled. Selectors can be visible in process arguments, shell history, AWS CLI history when enabled, and the query stored by CloudWatch.
+
 ## Output and compatibility
 
 All helpers emit sanitized JSON with `schema_version: "2.0"`, `status`, and `collection.complete`. Exit 0 means collection/analysis completed, 1 means partial, and 2 means failure or invalid input. Completion does not mean no security issues: always inspect findings. Scripts calling v0.1 should handle the new nonzero partial/failure exits and decimal-string cost amounts.
