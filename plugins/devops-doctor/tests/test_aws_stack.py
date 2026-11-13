@@ -51,6 +51,57 @@ class StackTests(unittest.TestCase):
         self.assertFalse(result["collection"]["complete"])
         self.assertEqual(result["scope"]["account_id"], "123456789012")
 
+    def test_bounded_inventory_preserves_cli_token_and_existing_data_shapes(self):
+        def command(base, profile, region):
+            if base[:2] == ["sts", "get-caller-identity"]:
+                return {"ok": True, "data": {"Account": "123456789012"}}
+            self.assertEqual(base[base.index("--max-items") + 1], "2")
+            self.assertNotIn("--no-paginate", base)
+            if base[:2] == ["route53", "list-hosted-zones"]:
+                self.assertIsNone(region)
+                return {"ok": True, "data": {"HostedZones": [], "NextToken": "opaque-zone-token"}}
+            self.assertIn("NextToken:NextToken", base[base.index("--query") + 1])
+            if base[:2] == ["lambda", "list-functions"]:
+                return {"ok": True, "data": {"items": [{"FunctionName": "one"}, {"FunctionName": "two"}],
+                                             "NextToken": "opaque-function-token"}}
+            self.assertEqual(base[:2], ["ecr", "describe-repositories"])
+            return {"ok": True, "data": {"items": [{"repositoryName": "one"}, {"repositoryName": "two"}],
+                                         "NextToken": None}}
+
+        with patch.object(stack, "aws_json", side_effect=command):
+            report = stack.build_report(arguments("--services", "lambda,ecr,route53", "--max-inventory-items", "2"))
+        inventory = report["raw"]["services"]
+        functions = inventory["lambda"]["functions"]
+        self.assertEqual(functions["data"], [{"FunctionName": "one"}, {"FunctionName": "two"}])
+        self.assertEqual(functions["NextToken"], "opaque-function-token")
+        self.assertTrue(functions["truncated"])
+        self.assertFalse(inventory["ecr"]["repositories"]["truncated"])
+        self.assertEqual(inventory["route53"]["hosted_zones"]["data"]["NextToken"], "opaque-zone-token")
+        self.assertTrue(inventory["route53"]["hosted_zones"]["truncated"])
+        self.assertEqual(report["status"], "partial")
+        self.assertFalse(report["collection"]["complete"])
+        self.assertEqual(report["scope"]["filters"]["limits"]["max_inventory_items"], 2)
+
+    def test_invalid_inventory_responses_do_not_count_as_complete(self):
+        args = arguments("--max-inventory-items", "1")
+        for data in ({}, [], {"items": None}, {"items": ["not an object"]}, {"items": [{}, {}]}):
+            with self.subTest(data=data), patch.object(stack, "aws_json", return_value={"ok": True, "data": data}):
+                result = stack.collect_ecr(args)["repositories"]
+                self.assertFalse(result["ok"])
+                self.assertEqual(stack.collect_status(result), "failed")
+
+    def test_bounded_alarm_inventory_reports_sample_size_instead_of_total(self):
+        args = arguments("--max-inventory-items", "1")
+        with patch.object(stack, "aws_json", return_value={"ok": True, "data": {
+            "items": [{"AlarmName": "example"}], "NextToken": "opaque-alarm-token",
+        }}) as command:
+            alarms = stack.collect_cloudwatch(args)
+        self.assertIn("MetricAlarm", command.call_args.args[0])
+        summary, findings, _ = stack.summarize_and_findings({"cloudwatch": alarms})
+        self.assertIsNone(summary["cloudwatch_alarm_count"])
+        self.assertEqual(summary["cloudwatch_alarms_evaluated"], 1)
+        self.assertEqual(findings[0]["resource"], "example")
+
     def test_concurrent_collectors_respect_worker_bound(self):
         lock = threading.Lock()
         active = peak = 0

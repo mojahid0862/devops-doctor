@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.24 - 2026-11-13
+
+- Apply scanner file and size checks to root package metadata and report invalid or unreadable metadata as incomplete.
+- Bound AWS inventories with `--max-inventory-items` (default 1000 per affected list). Keep continuation tokens and mark capped results partial. Use a fresh snapshot baseline for comparisons with earlier releases because the recorded scope includes the new limit.
+- Pin checkout and Python setup to reviewed upstream commits.
+
 ## 0.3.20 - 2026-11-12
 
 - Add explicit bounded local-evidence reads with exact adjacent-line packing and JSON selection, source-integrity checks, recoverable ranges and visible partial/error/redaction markers.

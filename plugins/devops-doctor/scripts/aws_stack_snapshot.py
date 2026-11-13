@@ -31,6 +31,32 @@ def aws_json(base: list[str], profile: str | None, region: str | None, timeout: 
     return run([*scoped(base, profile, region), "--output", "json"], timeout=timeout)
 
 
+def inventory_json(
+    base: list[str], args: argparse.Namespace, region: str | None, *,
+    projection: str | None = None, items_key: str = "items",
+) -> dict[str, Any]:
+    command = [*base, "--max-items", str(args.max_inventory_items)]
+    if projection is not None:
+        # CLI JSON queries run after pagination. Keep its resume token outside the list projection.
+        command += ["--query", "{items:" + projection + ",NextToken:NextToken}"]
+    result = aws_json(command, args.profile, region)
+    if not result.get("ok"):
+        return result
+    data = result.get("data")
+    items = data.get(items_key) if isinstance(data, dict) else None
+    if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+        return {**result, "ok": False, "data": None, "error": "unexpected inventory response shape"}
+    if len(items) > args.max_inventory_items:
+        return {**result, "ok": False, "data": None, "error": "inventory exceeded the requested item limit"}
+    truncated = bool(result.get("truncated") or data.get("NextToken"))
+    result = {**result, "truncated": truncated}
+    if projection is not None:
+        result["data"] = items
+        if data.get("NextToken"):
+            result["NextToken"] = data["NextToken"]
+    return result
+
+
 def since_to_start(value: str) -> str:
     match = re.fullmatch(r"(\d+)([hmHdD])", value.strip())
     if not match:
@@ -87,48 +113,29 @@ def collect_rds(args: argparse.Namespace) -> dict[str, Any]:
     instance_args = ["rds", "describe-db-instances", "--query", query]
     if args.db:
         instance_args += ["--db-instance-identifier", args.db]
-    instances = aws_json(instance_args, args.profile, args.region)
     if args.db:
+        instances = aws_json(instance_args, args.profile, args.region)
         return {"instances": instances, "filter": args.db,
                 "coverage": {"scope": "db_instance", "identifier": args.db, "truncated": False}}
-    clusters = aws_json(
-        [
-            "rds",
-            "describe-db-clusters",
-            "--query",
-            "DBClusters[].{DBClusterIdentifier:DBClusterIdentifier,Engine:Engine,EngineVersion:EngineVersion,Status:Status,StorageEncrypted:StorageEncrypted,BackupRetentionPeriod:BackupRetentionPeriod,DeletionProtection:DeletionProtection,DBClusterMembers:DBClusterMembers[].DBInstanceIdentifier}",
-        ],
-        args.profile,
-        args.region,
+    instances = inventory_json(["rds", "describe-db-instances"], args, args.region, projection=query)
+    clusters = inventory_json(
+        ["rds", "describe-db-clusters"], args, args.region,
+        projection="DBClusters[].{DBClusterIdentifier:DBClusterIdentifier,Engine:Engine,EngineVersion:EngineVersion,Status:Status,StorageEncrypted:StorageEncrypted,BackupRetentionPeriod:BackupRetentionPeriod,DeletionProtection:DeletionProtection,DBClusterMembers:DBClusterMembers[].DBInstanceIdentifier}",
     )
     return {"instances": instances, "clusters": clusters, "filter": args.db}
 
 
 def collect_elasticache(args: argparse.Namespace) -> dict[str, Any]:
-    clusters = aws_json(
-        [
-            "elasticache",
-            "describe-cache-clusters",
-            "--show-cache-node-info",
-            "--query",
-            "CacheClusters[].{CacheClusterId:CacheClusterId,Engine:Engine,CacheClusterStatus:CacheClusterStatus,CacheNodeType:CacheNodeType,NumCacheNodes:NumCacheNodes,TransitEncryptionEnabled:TransitEncryptionEnabled,AtRestEncryptionEnabled:AtRestEncryptionEnabled,CacheSubnetGroupName:CacheSubnetGroupName,SecurityGroups:SecurityGroups[].SecurityGroupId}",
-            *(["--cache-cluster-id", args.cache] if args.cache else []),
-        ],
-        args.profile,
-        args.region,
-    )
+    cluster_args = ["elasticache", "describe-cache-clusters", "--show-cache-node-info"]
+    query = "CacheClusters[].{CacheClusterId:CacheClusterId,Engine:Engine,CacheClusterStatus:CacheClusterStatus,CacheNodeType:CacheNodeType,NumCacheNodes:NumCacheNodes,TransitEncryptionEnabled:TransitEncryptionEnabled,AtRestEncryptionEnabled:AtRestEncryptionEnabled,CacheSubnetGroupName:CacheSubnetGroupName,SecurityGroups:SecurityGroups[].SecurityGroupId}"
     if args.cache:
+        clusters = aws_json([*cluster_args, "--query", query, "--cache-cluster-id", args.cache], args.profile, args.region)
         return {"cache_clusters": clusters, "filter": args.cache,
                 "coverage": {"scope": "cache_cluster", "identifier": args.cache, "truncated": False}}
-    repl = aws_json(
-        [
-            "elasticache",
-            "describe-replication-groups",
-            "--query",
-            "ReplicationGroups[].{ReplicationGroupId:ReplicationGroupId,Status:Status,Engine:Engine,MultiAZ:MultiAZ,AutomaticFailover:AutomaticFailover,TransitEncryptionEnabled:TransitEncryptionEnabled,AtRestEncryptionEnabled:AtRestEncryptionEnabled,CacheNodeType:CacheNodeType}",
-        ],
-        args.profile,
-        args.region,
+    clusters = inventory_json(cluster_args, args, args.region, projection=query)
+    repl = inventory_json(
+        ["elasticache", "describe-replication-groups"], args, args.region,
+        projection="ReplicationGroups[].{ReplicationGroupId:ReplicationGroupId,Status:Status,Engine:Engine,MultiAZ:MultiAZ,AutomaticFailover:AutomaticFailover,TransitEncryptionEnabled:TransitEncryptionEnabled,AtRestEncryptionEnabled:AtRestEncryptionEnabled,CacheNodeType:CacheNodeType}",
     )
     return {"cache_clusters": clusters, "replication_groups": repl, "filter": args.cache}
 
@@ -158,15 +165,10 @@ def collect_cloudfront(args: argparse.Namespace) -> dict[str, Any]:
     if args.distribution_id:
         return {"distribution": aws_json(["cloudfront", "get-distribution", "--id", args.distribution_id], args.profile, None)}
     return {
-        "distributions": aws_json(
-            [
-                "cloudfront",
-                "list-distributions",
-                "--query",
-                "DistributionList.Items[].{Id:Id,DomainName:DomainName,Enabled:Enabled,Status:Status,PriceClass:PriceClass,Aliases:Aliases.Items,Origins:Origins.Items[].DomainName,ViewerCertificate:ViewerCertificate.CloudFrontDefaultCertificate}",
-            ],
-            args.profile,
-            None,
+        "distributions": inventory_json(
+            ["cloudfront", "list-distributions"], args, None,
+            # CloudFront omits Items when the distribution list is empty.
+            projection="not_null(DistributionList.Items[].{Id:Id,DomainName:DomainName,Enabled:Enabled,Status:Status,PriceClass:PriceClass,Aliases:Aliases.Items,Origins:Origins.Items[].DomainName,ViewerCertificate:ViewerCertificate.CloudFrontDefaultCertificate}, `[]`)",
         )
     }
 
@@ -177,51 +179,31 @@ def collect_route53(args: argparse.Namespace) -> dict[str, Any]:
             "hosted_zone": aws_json(["route53", "get-hosted-zone", "--id", args.hosted_zone_id], args.profile, None),
             "records": aws_json(["route53", "list-resource-record-sets", "--hosted-zone-id", args.hosted_zone_id, "--max-items", "50"], args.profile, None),
         }
-    return {"hosted_zones": aws_json(["route53", "list-hosted-zones"], args.profile, None)}
+    return {"hosted_zones": inventory_json(["route53", "list-hosted-zones"], args, None, items_key="HostedZones")}
 
 
 def collect_lambda(args: argparse.Namespace) -> dict[str, Any]:
     return {
-        "functions": aws_json(
-            [
-                "lambda",
-                "list-functions",
-                "--query",
-                "Functions[].{FunctionName:FunctionName,Runtime:Runtime,MemorySize:MemorySize,Timeout:Timeout,LastModified:LastModified,PackageType:PackageType,State:State,Architectures:Architectures}",
-            ],
-            args.profile,
-            args.region,
+        "functions": inventory_json(
+            ["lambda", "list-functions"], args, args.region,
+            projection="Functions[].{FunctionName:FunctionName,Runtime:Runtime,MemorySize:MemorySize,Timeout:Timeout,LastModified:LastModified,PackageType:PackageType,State:State,Architectures:Architectures}",
         )
     }
 
 
 def collect_cloudwatch(args: argparse.Namespace) -> dict[str, Any]:
     return {
-        "alarms": aws_json(
-            [
-                "cloudwatch",
-                "describe-alarms",
-                "--state-value",
-                "ALARM",
-                "--query",
-                "MetricAlarms[].{AlarmName:AlarmName,StateValue:StateValue,StateReason:StateReason,Namespace:Namespace,MetricName:MetricName,Dimensions:Dimensions,UpdatedTimestamp:StateUpdatedTimestamp}",
-            ],
-            args.profile,
-            args.region,
+        "alarms": inventory_json(
+            ["cloudwatch", "describe-alarms", "--state-value", "ALARM", "--alarm-types", "MetricAlarm"], args, args.region,
+            projection="MetricAlarms[].{AlarmName:AlarmName,StateValue:StateValue,StateReason:StateReason,Namespace:Namespace,MetricName:MetricName,Dimensions:Dimensions,UpdatedTimestamp:StateUpdatedTimestamp}",
         )
     }
 
 
 def collect_ecr(args: argparse.Namespace) -> dict[str, Any]:
-    repos = aws_json(
-        [
-            "ecr",
-            "describe-repositories",
-            "--query",
-            "repositories[].{repositoryName:repositoryName,repositoryUri:repositoryUri,imageScanningConfiguration:imageScanningConfiguration,createdAt:createdAt}",
-        ],
-        args.profile,
-        args.region,
+    repos = inventory_json(
+        ["ecr", "describe-repositories"], args, args.region,
+        projection="repositories[].{repositoryName:repositoryName,repositoryUri:repositoryUri,imageScanningConfiguration:imageScanningConfiguration,createdAt:createdAt}",
     )
     return {"repositories": repos}
 
@@ -305,7 +287,9 @@ def summarize_and_findings(raw_services: dict[str, Any]) -> tuple[dict[str, Any]
     alarm_result = raw_services.get("cloudwatch", {}).get("alarms", {})
     alarms = alarm_result.get("data")
     if alarm_result.get("ok") and isinstance(alarms, list):
-        summary["cloudwatch_alarm_count"] = len(alarms)
+        summary["cloudwatch_alarm_count"] = None if alarm_result.get("truncated") else len(alarms)
+        if alarm_result.get("truncated"):
+            summary["cloudwatch_alarms_evaluated"] = len(alarms)
         for alarm in alarms[:10]:
             findings.append({"severity": "medium", "service": "cloudwatch", "rule": "alarm_in_alarm_state", "resource": alarm.get("AlarmName")})
 
@@ -345,6 +329,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--since", default="2h", help="CloudTrail lookback, for example 2h or 1d.")
     parser.add_argument("--max-workers", type=bounded_int(1, 16), default=4, help="Maximum concurrent service collectors (1-16; default 4).")
     parser.add_argument("--max-buckets", type=bounded_int(1, 1000), default=20, help="Maximum S3 buckets inspected (1-1000; default 20).")
+    parser.add_argument("--max-inventory-items", type=bounded_int(1, 10000), default=1000,
+                        help="Maximum items per RDS, ElastiCache, CloudFront, hosted zone, Lambda, CloudWatch alarm or ECR inventory request (default 1000).")
     parser.add_argument("--output", help="Write JSON snapshot to this path.")
     args = parser.parse_args(argv)
     args.selected_services = list(dict.fromkeys(service.strip().lower() for service in args.services.split(",") if service.strip()))
@@ -368,7 +354,8 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
              "filters": {**filters, "services": sorted(selected),
                          "limits": {"max_buckets": args.max_buckets, "max_ecs_clusters": 10,
                                     "max_ecs_services_per_cluster": 10, "max_tasks_per_state": 10,
-                                    "max_cloudtrail_events": 50, "max_route53_records": 50}}}
+                                    "max_cloudtrail_events": 50, "max_route53_records": 50,
+                                    "max_inventory_items": args.max_inventory_items}}}
     result = {
         "summary": {"profile": args.profile, "region": args.region, "generated_at": datetime.now(timezone.utc).isoformat()},
         "scope": scope, "findings": [], "evidence": {"identity": identity, "filters": filters},
