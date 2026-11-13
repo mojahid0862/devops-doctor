@@ -119,11 +119,19 @@ def configure_concurrency(max_workers: int) -> None:
     _COMMAND_SLOTS = threading.BoundedSemaphore(max_workers)
 
 
-def run_command(command: list[str], *, timeout: int = 60, parse_json: bool = True, text_limit: int | None = None) -> dict[str, Any]:
+def run_command(
+    command: list[str], *, timeout: float = 60, parse_json: bool = True, text_limit: int | None = None,
+    aws_max_attempts: int | None = None, aws_ignore_configured_endpoints: bool = False,
+    sanitize_json: bool = True,
+) -> dict[str, Any]:
     started = time.monotonic()
     result: dict[str, Any] = {"ok": False, "command": redacted_command(command), "returncode": None, "truncated": False}
     env = dict(os.environ)
     env.update({"AWS_PAGER": "", "AWS_CLI_AUTO_PROMPT": "off", "GLAB_PAGER": "", "GIT_PAGER": "cat", "GIT_TERMINAL_PROMPT": "0"})
+    if aws_max_attempts is not None:
+        env["AWS_MAX_ATTEMPTS"] = str(aws_max_attempts)
+    if aws_ignore_configured_endpoints:
+        env["AWS_IGNORE_CONFIGURED_ENDPOINT_URLS"] = "true"
     try:
         with _COMMAND_SLOTS:
             proc = subprocess.run(command, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, env=env)
@@ -132,7 +140,8 @@ def run_command(command: list[str], *, timeout: int = 60, parse_json: bool = Tru
             result["error"] = redact(proc.stderr or proc.stdout or f"command exited {proc.returncode}")[-2000:]
         elif parse_json:
             try:
-                result["data"] = sanitize(json.loads(proc.stdout))
+                data = json.loads(proc.stdout)
+                result["data"] = sanitize(data) if sanitize_json else data
                 result["ok"] = True
                 if isinstance(result["data"], dict):
                     result["truncated"] = any(result["data"].get(k) for k in ("NextToken", "nextToken", "NextPageToken", "next_page_token", "NextContinuationToken"))
@@ -208,7 +217,7 @@ def run_ecs_read(command: list[str], *, timeout: int = 60) -> dict[str, Any]:
     return result
 
 
-def emit_result(result: dict[str, Any], output: str | Path | None = None) -> int:
+def result_payload(result: dict[str, Any]) -> tuple[str, int]:
     clean = sanitize(result)
     status = collect_status(clean)
     weights = {"complete": 0, "partial": 1, "failed": 2}
@@ -220,6 +229,11 @@ def emit_result(result: dict[str, Any], output: str | Path | None = None) -> int
     clean.setdefault("generated_at", datetime.now(timezone.utc).isoformat())
     clean.setdefault("collection", {})["complete"] = status == "complete"
     payload = json.dumps(clean, indent=2, sort_keys=True, default=str, ensure_ascii=False) + "\n"
+    return payload, weights[status]
+
+
+def emit_result(result: dict[str, Any], output: str | Path | None = None) -> int:
+    payload, code = result_payload(result)
     if output:
         target = Path(output)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -233,4 +247,4 @@ def emit_result(result: dict[str, Any], output: str | Path | None = None) -> int
                 os.unlink(temp_name)
     else:
         print(payload, end="")
-    return weights[status]
+    return code

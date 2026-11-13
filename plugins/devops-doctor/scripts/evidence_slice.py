@@ -145,7 +145,10 @@ def _credential_path(path: Path) -> bool:
             any(part in {".ssh", ".aws", ".kube", ".azure"} for part in parts))
 
 
-def _load(path: str | Path, sha256: str | None) -> tuple[dict[str, Any], str]:
+def read_local_text(
+    path: str | Path, sha256: str | None = None, *, follow_symlinks: bool = True,
+) -> tuple[dict[str, Any], str]:
+    """Read and identify a bounded UTF-8 regular file without interpreting its contents."""
     if sha256 is not None and (not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", sha256)):
         raise EvidenceError("sha256_requires_64_hex_characters")
     try:
@@ -155,6 +158,8 @@ def _load(path: str | Path, sha256: str | None) -> tuple[dict[str, Any], str]:
         resolved = supplied.resolve(strict=True)
         if _credential_path(resolved):
             raise EvidenceError("credential_file_not_read")
+        if not follow_symlinks and resolved != Path(os.path.abspath(supplied)):
+            raise EvidenceError("source_symlink_not_allowed")
         if not resolved.is_file():
             raise EvidenceError("source_requires_regular_file")
         with resolved.open("rb") as stream:
@@ -168,6 +173,8 @@ def _load(path: str | Path, sha256: str | None) -> tuple[dict[str, Any], str]:
         current = resolved.stat()
         identity = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns)
         if identity(before) != identity(after) or identity(after) != identity(current):
+            raise EvidenceError("source_changed_during_read")
+        if not follow_symlinks and supplied.resolve(strict=True) != resolved:
             raise EvidenceError("source_changed_during_read")
         if len(raw) > MAX_INPUT_BYTES:
             raise EvidenceError("source_exceeds_8MiB_limit")
@@ -354,7 +361,7 @@ def read_evidence(path: str | Path, mode: str, *, ranges: list[Any] | None = Non
             raise EvidenceError("requires_1_to_128_explicit_selections")
         if (mode == "lines" and (pointers is not None or array_range is not None)) or (mode == "json" and (ranges is not None or pack_runs)):
             raise EvidenceError("options_do_not_match_mode")
-        source, text = _load(path, sha256)
+        source, text = read_local_text(path, sha256)
         packet = {"schema": "evidence_slice_v1", "status": "partial", "mode": mode, "source": source}
         if mode == "lines":
             items, plans = _plan_lines(text, selections, pack_runs)

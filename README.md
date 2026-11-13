@@ -1,4 +1,4 @@
-# DevOps Doctor 0.3.24
+# DevOps Doctor 0.3.25
 
 DevOps Doctor is a Codex plugin for fast, read-only DevOps/SRE work across GitLab CI/CD, AWS stack health, Terraform, Docker, Kubernetes, web/mobile apps, cost review, security drift, observability, and rollback planning.
 
@@ -43,6 +43,9 @@ Start a new Codex thread after installation so the plugin skills are loaded.
 - `gitlab_pipeline_snapshot.py`: failed pipeline/job evidence with root-cause candidates.
 - `aws_stack_snapshot.py`: bounded AWS stack summary for ECS, RDS, ElastiCache, S3, CloudFront, Route 53, Lambda, CloudWatch, ECR, and CloudTrail.
 - `aws_deploy_snapshot.py`: ECS/Fargate deploy correlation with task, target health, ECR, CloudTrail, alarms, and logs.
+- `aws_log_correlation.py`: bounded CloudWatch Logs Insights correlation with redacted samples and coverage markers.
+- `aws_security_findings.py`: scoped Security Hub and GuardDuty findings with optional protected local evidence.
+- `cloudformation_review.py`: offline template, saved change-set, and stack-event review.
 - `repo_devops_scan.py`: web/mobile/CI/Docker/IaC repo signals and secret-risk patterns.
 - `aws_cost_snapshot.py`: dimension-level costs and optional previous-period comparison.
 - `snapshot_diff.py`: offline comparison of compatible finding snapshots, preserving uncertainty for incomplete coverage.

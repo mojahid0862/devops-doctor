@@ -1,4 +1,4 @@
-# DevOps Doctor 0.3.24
+# DevOps Doctor 0.3.25
 
 Read-only diagnostic skills and Python helpers for GitLab and AWS, plus offline Terraform, repo, and saved-finding reviews.
 
@@ -61,6 +61,52 @@ python scripts/snapshot_diff.py --before work/baseline.json --after work/current
 Billing end dates are exclusive; default periods use completed UTC dates. Cost amounts are decimal strings, retain currency and estimated flags, and can compare an equal-length previous interval. Cost collection follows pagination explicitly.
 
 Drift compares recorded findings, not all infrastructure settings. Account, region, collector, and filters must match. A partial snapshot cannot establish resolution. Keep the collector/ruleset version identical between baseline and current runs.
+
+## CloudWatch Logs Insights correlation
+
+Run from the plugin directory with the AWS CLI and an existing credential profile.
+
+~~~bash
+python scripts/aws_log_correlation.py --profile dev --account-id 123456789012 --region ap-south-1 --log-group /aws/lambda/orders --log-group /ecs/payments --start 2026-11-13T06:00:00Z --end 2026-11-13T06:15:00Z --correlation-id trace-123 --output work/log-correlation.json
+~~~
+
+Supply at least one of `--request-id` and `--correlation-id`. Both must match when supplied together. Use explicit groups in one account and Region and an inclusive start and exclusive end. The query recognizes common top-level JSON ID fields and plain-text ID labels. It flags structured HTTP 5xx and recognized error-level signals. Other schemas, unlogged requests, and delayed ingestion can leave gaps.
+
+Defaults are five groups, 60 minutes, 100 rows, five samples, 12 KiB of JSON, and ten polls within a 45-second CLI budget. See `--help` for bounded overrides. Samples are ordered by timestamp, favor distinct groups when space is limited, and contain report-local ID aliases in place of raw IDs. Raw log messages and AWS error bodies are excluded. Counts deduplicate usable returned rows. CloudWatch scan and match statistics are reported separately. A completed empty query means zero returned matches within the configured scope and recognized fields. Capped, unfinished, and invalid results remain partial or failed.
+
+Reuse matching deployment, alarm, ECS, and Lambda evidence when building the timeline. The helper uses standard AWS endpoints and needs STS identity plus CloudWatch Logs `StartQuery` and `GetQueryResults`, with `StopQuery` for best-effort cleanup. Queries can incur scan charges. Result and output limits bound returned evidence, while the amount scanned depends on the selected groups and window. The report flags when a query may continue after local collection ends.
+
+Use opaque diagnostic IDs and a profile with AWS CLI history disabled. Selectors can be visible in process arguments, shell history, AWS CLI history when enabled, and the query stored by CloudWatch.
+
+## AWS Security Hub and GuardDuty findings
+
+~~~bash
+python scripts/aws_security_findings.py --profile dev --account-id 123456789012 --region ap-south-1
+~~~
+
+The helper verifies the expected account with STS and checks the account and Region on each finding, including results from Security Hub aggregation. This scope uses ASFF `AwsAccountId` and `Region`, OCSF `cloud.account.uid` and `cloud.region`, and GuardDuty `AccountId` and `Region`. Underlying event origin is unverified. Related resources may span accounts or Regions and retain their own location when AWS supplies it. Security Hub V2 (OCSF) is the default. Use `--securityhub-api cspm` for Security Hub CSPM (ASFF) and repeat `--service` to select sources. GuardDuty includes both active and archived findings. Keep the per-service counts separate because Security Hub can also import GuardDuty findings.
+
+The summary reports severity counts, attack-sequence and exposure counts, service outcomes, and coverage gaps. It omits finding IDs, resource IDs, descriptions, tags, and AWS error bodies. Add `--evidence-dir <new-directory>` under a trusted local parent to save a projected `findings.json` with original finding IDs, source, account, Region, resource identities, severity, status, and timestamps. Keep that directory out of Git and shared or synced folders. This option requires Windows Python with private directory support (3.10.15+, 3.11.10+, 3.12.4+, or 3.13+) or a POSIX filesystem that enforces owner-only permissions. The collector checks CLI history locally before AWS calls and stops if history is enabled or its setting cannot be checked. GuardDuty finding IDs used in detail requests and pagination tokens can still be visible to privileged local process monitoring.
+
+Defaults are 50 findings examined and five pages per service, 25 entries per page, a shared 60-second AWS CLI budget, and 64 KiB per emitted artifact. See `--help` for bounded overrides. The configured AWS CLI profile needs the applicable Security Hub describe and findings reads, or GuardDuty `ListDetectors`, `GetDetector`, `ListFindings`, and `GetFindings`. The collector uses standard AWS endpoints.
+
+Complete means the requested API listing finished within its bounds. Coverage is one account and Region and depends on the services, finding retention, and integrations configured there. Review configuration, detection coverage, and individual findings separately. Empty, disabled, unavailable, and truncated collections have distinct outcomes.
+
+## CloudFormation offline review
+
+~~~bash
+python scripts/cloudformation_review.py template --file template.yaml --guard-rules security.guard
+python scripts/cloudformation_review.py change-set --file describe-change-set.json
+python scripts/cloudformation_review.py events --file describe-stack-events.json --output work/cfn-timeline.json
+~~~
+
+Review the smallest saved artifact that answers the question. The helper reads local files only. Supply the original JSON response body from AWS CLI or MCP for `DescribeChangeSet` or `DescribeStackEvents` and keep pagination markers. Preserve the reviewed input and pin it with `--sha256` when reproducing a report. A missing continuation marker cannot establish that a saved export includes every page.
+
+Template mode supports JSON with the standard library and YAML with an already available PyYAML installation. It reports literal exposure and encryption signals and flags state-retention policies for review. It leaves intrinsics, conditions, transforms, nested templates, and live settings unresolved. An installed `cfn-lint` checks a metadata-free copy with neutral configuration for templates without transforms or nested templates. An installed `cfn-guard` evaluates a supplied local rules file. Validator output is reduced to an outcome because diagnostics can echo private values. Missing tools or rules and skipped, failed, or timed-out checks are reported.
+
+Change set mode reports AWS-recorded actions and definite, conditional, or unknown replacements. Review dependencies, backup or retention, and rollback before acting on disruptive changes. Event mode orders timestamps and links earlier failures to rollback events when an operation ID or request token matches within the same stack. These links describe timing and correlation. The report uses aliases and reason categories instead of exporting raw resource IDs, reasons, or property values.
+
+Inputs use the shared 8 MiB limit. Supply regular files without symlinks for templates, exports, and Guard rules. Defaults are 500 items, 64 KiB of output, and 15 seconds per validator. See `--help` for bounded overrides. A partial report can still contain actionable findings.
 
 ## Output and compatibility
 

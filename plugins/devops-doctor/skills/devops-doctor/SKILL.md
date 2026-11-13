@@ -17,6 +17,7 @@ Read [the shared evidence contract](references/evidence-contract.md). The main a
 | AWS cross-service deployment incident | `$aws-deployment-doctor` |
 | ECS/Fargate service, tasks, or target health | `$ecs-fargate-doctor` |
 | Terraform plan risks | `$terraform-plan-review` |
+| CloudFormation template, saved change set, or stack events | [CloudFormation offline review](../../README.md#cloudformation-offline-review) |
 | AWS spend, cost changes, or rightsizing | `$cost-optimizer` |
 | Security posture or saved-snapshot drift | `$security-drift-check` |
 | Rollback/recovery plan | `$rollback-planner` |

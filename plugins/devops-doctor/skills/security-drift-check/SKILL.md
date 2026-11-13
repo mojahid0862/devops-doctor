@@ -25,7 +25,7 @@ Read [the shared evidence contract](../devops-doctor/references/evidence-contrac
 python "<plugin-root>/scripts/repo_devops_scan.py" --root . --output devops-security-scan.json
 ```
 
-2. For AWS, capture only needed read-only evidence:
+2. For AWS, reuse matching evidence and collect only the missing signal. For requested Security Hub or GuardDuty findings, use the [bounded findings helper](../../README.md#aws-security-hub-and-guardduty-findings) with the expected account, Region, and relevant service. Keep protected evidence local and report aggregate counts and coverage. Empty results apply only to the queried source and scope. Use the stack snapshot for missing infrastructure configuration evidence:
 
 ```bash
 python "<plugin-root>/scripts/aws_stack_snapshot.py" --region <region> --services ecs,rds,elasticache,s3,cloudfront,route53,lambda,cloudwatch,ecr,cloudtrail --output aws-security-snapshot.json
