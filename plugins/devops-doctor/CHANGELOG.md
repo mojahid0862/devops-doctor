@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add bounded CloudWatch Logs Insights correlation across explicit log groups with request and correlation ID filters, redacted samples, query statistics, and partial-coverage markers.
+- Add scoped Security Hub V2, Security Hub CSPM, and GuardDuty collection with separate severity totals, bounded pagination, and optional protected local evidence.
+- Add offline CloudFormation template, saved change set, and stack-event review with optional local validators and redacted replacement and rollback evidence.
+
+Before release, verify the CloudWatch query and cleanup against synthetic logs in an authorized non-production account. Verify Security Hub V2, CSPM, and GuardDuty response shape, scope, and pagination with authorized read-only non-production checks. CloudFormation can be verified offline against representative saved AWS exports and locally available validators.
+
 ## 0.3.24 - 2026-11-13
 
 - Apply scanner file and size checks to root package metadata and report invalid or unreadable metadata as incomplete.
